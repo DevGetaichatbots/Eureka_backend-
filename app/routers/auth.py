@@ -21,10 +21,16 @@ async def login(credentials: LoginRequest, response: Response):
     if user_match and user_match.get("password_hash"):
         valid = verify_password(credentials.password, user_match["password_hash"])
 
-    if not valid or not user_match or user_match.get("status") == "disabled":
+    if not user_match or not valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
+        )
+
+    if user_match.get("status") == "disabled":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is disabled. Please contact an administrator.",
         )
 
     # Update last login in memory AND persist to Supabase
@@ -78,6 +84,12 @@ async def get_me(user_payload: dict = Depends(get_current_user_payload)):
     """Returns profile for currently authenticated viewer session"""
     email = user_payload.get("email", "admin@eurekajo.com")
     user_match = next((u for u in db.app_users if u["email"] == email), None)
+
+    if user_match and user_match.get("status") == "disabled":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is disabled. Please contact an administrator.",
+        )
 
     if not user_match:
         user_match = {

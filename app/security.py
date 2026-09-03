@@ -119,4 +119,16 @@ async def get_current_user_payload(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session token",
         )
+
+    # Reject disabled users
+    from app.database import db
+    user_email = payload.get("email")
+    if user_email:
+        user_match = next((u for u in db.app_users if u.get("email") == user_email), None)
+        if user_match and user_match.get("status") == "disabled":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account is disabled. Please contact an administrator.",
+            )
+
     return payload
