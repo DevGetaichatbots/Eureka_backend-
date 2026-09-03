@@ -67,6 +67,31 @@ class SupabaseDatabase:
                     return int(total)
         return len(self.messages)
 
+    def get_message_counts_by_contact(self) -> Dict[int, int]:
+        """Actual message rows per contact — same source as the conversation thread."""
+        counts: Dict[int, int] = {}
+        page_size = 1000
+        offset = 0
+        with self._get_client() as client:
+            while offset < 100000:
+                res = client.get(
+                    "/rest/v1/messages?select=contact_id",
+                    headers={"Range": f"{offset}-{offset + page_size - 1}"},
+                )
+                if res.status_code not in (200, 206):
+                    break
+                rows = res.json() or []
+                for row in rows:
+                    cid = row.get("contact_id")
+                    if cid is None:
+                        continue
+                    cid_int = int(cid)
+                    counts[cid_int] = counts.get(cid_int, 0) + 1
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+        return counts
+
     @property
     def messages(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
@@ -265,7 +290,6 @@ class SupabaseDatabase:
                 contact = res.json()[0]
                 update_data = {
                     "last_seen_at": now_iso,
-                    "message_count": contact.get("message_count", 0) + 1,
                 }
                 if profile_name and profile_name.strip():
                     update_data["profile_name"] = profile_name

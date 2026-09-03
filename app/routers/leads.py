@@ -17,10 +17,11 @@ async def get_leads_summary(user_payload: dict = Depends(get_current_user_payloa
     """
     now = datetime.now(timezone.utc)
     contacts = db.contacts
+    message_counts = db.get_message_counts_by_contact()
     active_24h_count = sum(
         1 for c in contacts if (now - c["last_seen_at"]) <= timedelta(hours=24)
     )
-    total_messages = db.count_messages()
+    total_messages = sum(message_counts.values())
 
     leads_out = [
         ContactOut(
@@ -29,7 +30,7 @@ async def get_leads_summary(user_payload: dict = Depends(get_current_user_payloa
             profile_name=c.get("profile_name"),
             first_seen_at=c["first_seen_at"],
             last_seen_at=c["last_seen_at"],
-            message_count=c["message_count"],
+            message_count=message_counts.get(c["id"], 0),
         )
         for c in sorted(contacts, key=lambda x: x["last_seen_at"], reverse=True)
     ]
@@ -67,6 +68,7 @@ async def export_leads_csv(user_payload: dict = Depends(get_current_user_payload
     ])
 
     now = datetime.now(timezone.utc)
+    message_counts = db.get_message_counts_by_contact()
     for c in sorted(db.contacts, key=lambda x: x["last_seen_at"], reverse=True):
         is_active = (now - c["last_seen_at"]) <= timedelta(hours=24)
         writer.writerow([
@@ -75,7 +77,7 @@ async def export_leads_csv(user_payload: dict = Depends(get_current_user_payload
             c.get("profile_name", "Unknown"),
             c["first_seen_at"].isoformat(),
             c["last_seen_at"].isoformat(),
-            c["message_count"],
+            message_counts.get(c["id"], 0),
             "Active" if is_active else "Closed",
         ])
 
@@ -110,6 +112,7 @@ async def export_leads_xlsx(user_payload: dict = Depends(get_current_user_payloa
     ])
 
     now = datetime.now(timezone.utc)
+    message_counts = db.get_message_counts_by_contact()
     for c in sorted(db.contacts, key=lambda x: x["last_seen_at"], reverse=True):
         is_active = (now - c["last_seen_at"]) <= timedelta(hours=24)
         ws.append([
@@ -118,7 +121,7 @@ async def export_leads_xlsx(user_payload: dict = Depends(get_current_user_payloa
             c.get("profile_name", "Unknown"),
             c["first_seen_at"].isoformat(),
             c["last_seen_at"].isoformat(),
-            c["message_count"],
+            message_counts.get(c["id"], 0),
             "Active" if is_active else "Closed",
         ])
 
