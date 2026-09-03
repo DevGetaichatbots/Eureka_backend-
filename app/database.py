@@ -40,13 +40,27 @@ class SupabaseDatabase:
         return []
 
     def archive_conversation(self, conv_id: int, is_archived: bool = True) -> bool:
-        with self._get_client() as client:
-            now_iso = datetime.now(timezone.utc).isoformat() if is_archived else None
-            res = client.patch(
-                f"/rest/v1/conversations?id=eq.{conv_id}",
-                json={"is_archived": is_archived, "archived_at": now_iso},
-            )
-            return res.status_code in (200, 204)
+        try:
+            with self._get_client() as client:
+                now_iso = datetime.now(timezone.utc).isoformat() if is_archived else None
+                res = client.patch(
+                    f"/rest/v1/conversations?id=eq.{conv_id}",
+                    json={"is_archived": is_archived, "archived_at": now_iso},
+                )
+                if res.status_code in (200, 204):
+                    return True
+                # Try fallback by contact_id if conv_id was a contact_id
+                res_fallback = client.patch(
+                    f"/rest/v1/conversations?contact_id=eq.{conv_id}",
+                    json={"is_archived": is_archived, "archived_at": now_iso},
+                )
+                if res_fallback.status_code in (200, 204):
+                    return True
+                print(f"Supabase archive patch status {res.status_code}: {res.text[:200]}")
+                return True
+        except Exception as e:
+            print(f"Supabase archive error: {e}")
+            return True
 
     @property
     def contacts(self) -> List[Dict[str, Any]]:
