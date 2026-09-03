@@ -259,10 +259,35 @@ async def archive_conversation_endpoint(
     Archives or unarchives a conversation persistently in Supabase database.
     """
     is_archived = True
-    if payload and "is_archived" in payload:
-        is_archived = bool(payload["is_archived"])
+    chat_user_name = None
+    wa_id = None
+    archived_by_user = user_payload.get("email") or "admin@eurekajo.com" if isinstance(user_payload, dict) else "admin@eurekajo.com"
+    last_message = None
+    message_count = 0
+    contact_id = None
+
+    if payload:
+        if "is_archived" in payload:
+            is_archived = bool(payload["is_archived"])
+        chat_user_name = payload.get("chat_user_name") or payload.get("contact_name")
+        wa_id = payload.get("wa_id")
+        if payload.get("archived_by_user"):
+            archived_by_user = payload["archived_by_user"]
+        last_message = payload.get("last_message")
+        message_count = int(payload.get("message_count", 0))
+        contact_id = payload.get("contact_id")
+
     try:
-        db.archive_conversation(id, is_archived=is_archived)
+        db.archive_conversation(
+            conv_id=id,
+            is_archived=is_archived,
+            chat_user_name=chat_user_name,
+            wa_id=wa_id,
+            archived_by_user=archived_by_user,
+            last_message=last_message,
+            message_count=message_count,
+            contact_id=contact_id,
+        )
     except Exception as e:
         print(f"Archive error for #{id}: {e}")
-    return {"success": True, "id": id, "is_archived": is_archived}
+    return {"success": True, "id": id, "chat_user_name": chat_user_name, "is_archived": is_archived}

@@ -39,24 +39,40 @@ class SupabaseDatabase:
                 return data
         return []
 
-    def archive_conversation(self, conv_id: int, is_archived: bool = True) -> bool:
+    def archive_conversation(
+        self,
+        conv_id: int,
+        is_archived: bool = True,
+        chat_user_name: Optional[str] = None,
+        wa_id: Optional[str] = None,
+        archived_by_user: Optional[str] = "admin@eurekajo.com",
+        last_message: Optional[str] = None,
+        message_count: int = 0,
+        contact_id: Optional[int] = None,
+    ) -> bool:
         try:
             with self._get_client() as client:
-                now_iso = datetime.now(timezone.utc).isoformat() if is_archived else None
-                res = client.patch(
-                    f"/rest/v1/conversations?id=eq.{conv_id}",
-                    json={"is_archived": is_archived, "archived_at": now_iso},
-                )
-                if res.status_code in (200, 204):
-                    return True
-                # Try fallback by contact_id if conv_id was a contact_id
-                res_fallback = client.patch(
-                    f"/rest/v1/conversations?contact_id=eq.{conv_id}",
-                    json={"is_archived": is_archived, "archived_at": now_iso},
-                )
-                if res_fallback.status_code in (200, 204):
-                    return True
-                print(f"Supabase archive patch status {res.status_code}: {res.text[:200]}")
+                now_iso = datetime.now(timezone.utc).isoformat()
+                if is_archived:
+                    # Upsert into archived_chats table
+                    archived_row = {
+                        "conversation_id": conv_id,
+                        "contact_id": contact_id,
+                        "chat_user_name": chat_user_name,
+                        "wa_id": wa_id,
+                        "archived_by_user": archived_by_user or "admin@eurekajo.com",
+                        "last_message": last_message,
+                        "message_count": message_count,
+                        "archived_at": now_iso,
+                    }
+                    client.post(
+                        "/rest/v1/archived_chats",
+                        json=[archived_row],
+                        headers={"Prefer": "resolution=merge-duplicates"},
+                    )
+                else:
+                    # Delete from archived_chats table on unarchive
+                    client.delete(f"/rest/v1/archived_chats?conversation_id=eq.{conv_id}")
                 return True
         except Exception as e:
             print(f"Supabase archive error: {e}")
