@@ -27,17 +27,59 @@ class SupabaseDatabase:
     @property
     def conversations(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
+            deleted_ids = set()
+            del_res = client.get("/rest/v1/deleted_chats?select=conversation_id")
+            if del_res.status_code == 200:
+                for row in del_res.json():
+                    cid = row.get("conversation_id")
+                    if cid is not None:
+                        try:
+                            deleted_ids.add(int(cid))
+                        except (ValueError, TypeError):
+                            pass
+
             res = client.get("/rest/v1/conversations?select=*&order=last_message_at.desc")
             if res.status_code == 200:
                 data = res.json()
+                filtered = []
                 for c in data:
+                    if int(c["id"]) in deleted_ids:
+                        continue
                     c["started_at"] = datetime.fromisoformat(c["started_at"].replace('Z', '+00:00'))
                     c["last_message_at"] = datetime.fromisoformat(c["last_message_at"].replace('Z', '+00:00'))
                     c["is_archived"] = bool(c.get("is_archived", False))
                     if c.get("archived_at"):
                         c["archived_at"] = datetime.fromisoformat(c["archived_at"].replace('Z', '+00:00'))
-                return data
+                    filtered.append(c)
+                return filtered
         return []
+
+    def delete_conversation(
+        self,
+        conv_id: int,
+        contact_id: Optional[int] = None,
+        wa_id: Optional[str] = None,
+        deleted_by_user: Optional[str] = "admin@eurekajo.com",
+    ) -> bool:
+        try:
+            with self._get_client() as client:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                row = {
+                    "conversation_id": conv_id,
+                    "contact_id": contact_id,
+                    "wa_id": wa_id,
+                    "deleted_by_user": deleted_by_user or "admin@eurekajo.com",
+                    "deleted_at": now_iso,
+                }
+                client.post(
+                    "/rest/v1/deleted_chats",
+                    json=[row],
+                    headers={"Prefer": "resolution=merge-duplicates"},
+                )
+                return True
+        except Exception as e:
+            print(f"Supabase delete_conversation error: {e}")
+            return True
 
     def archive_conversation(
         self,

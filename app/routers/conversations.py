@@ -291,3 +291,35 @@ async def archive_conversation_endpoint(
     except Exception as e:
         print(f"Archive error for #{id}: {e}")
     return {"success": True, "id": id, "chat_user_name": chat_user_name, "is_archived": is_archived}
+
+
+@router.delete("/{id}")
+async def delete_conversation_endpoint(
+    id: int,
+    payload: Optional[Dict[str, Any]] = None,
+    user_payload: dict = Depends(get_current_user_payload),
+):
+    """
+    Hides/deletes a conversation across all users permanently without hard-deleting messages.
+    """
+    contact_id = None
+    wa_id = None
+    deleted_by_user = user_payload.get("email") or "admin@eurekajo.com" if isinstance(user_payload, dict) else "admin@eurekajo.com"
+
+    if payload:
+        contact_id = payload.get("contact_id")
+        wa_id = payload.get("wa_id")
+        if payload.get("deleted_by_user"):
+            deleted_by_user = payload["deleted_by_user"]
+
+    try:
+        db.delete_conversation(
+            conv_id=id,
+            contact_id=contact_id,
+            wa_id=wa_id,
+            deleted_by_user=deleted_by_user,
+        )
+    except Exception as e:
+        print(f"Delete conversation error for #{id}: {e}")
+
+    return {"success": True, "id": id}
