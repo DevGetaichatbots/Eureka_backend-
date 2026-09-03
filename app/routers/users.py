@@ -14,6 +14,15 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = None
 
 
+def is_super_admin(payload: dict) -> bool:
+    try:
+        uid = int(payload.get("sub", 0))
+    except (ValueError, TypeError):
+        uid = 0
+    email = (payload.get("email") or "").strip().lower()
+    return uid == 1 or email == "admin@eurekajo.com"
+
+
 @router.get("", response_model=List[UserOut])
 async def list_users(user_payload: dict = Depends(get_current_user_payload)):
     """Returns all team members directly from Supabase"""
@@ -40,11 +49,18 @@ async def create_user(
     req: CreateUserRequest,
     user_payload: dict = Depends(get_current_user_payload),
 ):
-    """Admin-only: Creates a new user in Supabase"""
+    """Admin-only: Creates a new user in Supabase. Only Super Admin can create other Admins."""
     if user_payload.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privilege required to create users",
+        )
+
+    # Only Super Admin can create new Administrator accounts
+    if req.role == "admin" and not is_super_admin(user_payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the primary Super Administrator can create new Administrator accounts.",
         )
 
     # Check duplicate
@@ -97,6 +113,35 @@ async def update_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privilege required to update users",
         )
+
+    target_user = next((u for u in db.app_users if u.get("id") == id), None)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    # 1. Super Admin account cannot be modified or demoted
+    if id == 1 or (target_user.get("email") or "").lower() == "admin@eurekajo.com":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Primary Super Administrator account cannot be modified or demoted.",
+        )
+
+    # 2. Non-Super Admins cannot modify ANY Admin account
+    if target_user.get("role") == "admin" and not is_super_admin(user_payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the primary Super Administrator can modify other administrator accounts.",
+        )
+
+    # 3. Non-Super Admins cannot promote anyone to Admin
+    if req.role == "admin" and not is_super_admin(user_payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the primary Super Administrator can grant Administrator privileges.",
+        )
+
     update_data = {}
     if req.status is not None:
         update_data["status"] = req.status
@@ -132,6 +177,28 @@ async def update_user_status(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privilege required to update users",
         )
+
+    target_user = next((u for u in db.app_users if u.get("id") == id), None)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    # 1. Super Admin account cannot be disabled
+    if id == 1 or (target_user.get("email") or "").lower() == "admin@eurekajo.com":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Primary Super Administrator account cannot be disabled.",
+        )
+
+    # 2. Non-Super Admins cannot disable or enable ANY Admin account
+    if target_user.get("role") == "admin" and not is_super_admin(user_payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the primary Super Administrator can disable or enable other administrator accounts.",
+        )
+
     updated = db.update_user(id, {"status": req.status})
     if not updated:
         raise HTTPException(
@@ -160,10 +227,26 @@ async def delete_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privilege required to delete users",
         )
-    if id == 1:
+
+    target_user = next((u for u in db.app_users if u.get("id") == id), None)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    # 1. Super Admin account cannot be deleted
+    if id == 1 or (target_user.get("email") or "").lower() == "admin@eurekajo.com":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete primary administrator",
+            detail="Cannot delete primary Super Administrator account.",
+        )
+
+    # 2. Non-Super Admins cannot delete ANY Admin account
+    if target_user.get("role") == "admin" and not is_super_admin(user_payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the primary Super Administrator can delete administrator accounts.",
         )
 
     success = db.delete_user(id)
@@ -174,3 +257,4 @@ async def delete_user(
         )
 
     return {"message": "User deleted successfully", "success": True}
+
