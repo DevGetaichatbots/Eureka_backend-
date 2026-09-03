@@ -346,12 +346,12 @@ class SupabaseDatabase:
     @property
     def app_users(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
-            res = client.get("/rest/v1/app_users?status=neq.deleted&select=*&order=id.asc")
+            res = client.get("/rest/v1/app_users?select=*&order=id.asc")
             if res.status_code == 200:
                 data = res.json()
                 filtered = []
                 for u in data:
-                    if u.get("status") == "deleted":
+                    if (u.get("status") or "").lower() == "deleted":
                         continue
                     if u.get("created_at"):
                         u["created_at"] = datetime.fromisoformat(u["created_at"].replace('Z', '+00:00'))
