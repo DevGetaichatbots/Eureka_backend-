@@ -2,6 +2,7 @@ import os
 import httpx
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 from app.config import settings
 
 
@@ -194,6 +195,29 @@ class SupabaseDatabase:
                 return data
         return []
 
+    def get_users_by_email(self, email: str) -> List[Dict[str, Any]]:
+        clean = (email or "").strip().lower()
+        if not clean:
+            return []
+        encoded = quote(clean, safe="")
+        with self._get_client() as client:
+            res = client.get(
+                f"/rest/v1/app_users?email=eq.{encoded}&select=*&order=id.desc"
+            )
+            if res.status_code != 200:
+                return []
+            data = res.json() or []
+            for u in data:
+                if u.get("created_at") and isinstance(u["created_at"], str):
+                    u["created_at"] = datetime.fromisoformat(u["created_at"].replace("Z", "+00:00"))
+                if u.get("last_login_at") and isinstance(u["last_login_at"], str):
+                    u["last_login_at"] = datetime.fromisoformat(u["last_login_at"].replace("Z", "+00:00"))
+            return data
+
+    def get_user_for_login(self, email: str) -> Optional[Dict[str, Any]]:
+        users = self.get_users_by_email(email)
+        return users[0] if users else None
+
     def update_last_login(self, user_id: int) -> None:
         """Persists last_login_at timestamp to Supabase for a user."""
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -260,14 +284,28 @@ class SupabaseDatabase:
             res = client.delete(f"/rest/v1/app_users?id=eq.{user_id}")
             return res.status_code in (200, 204)
 
-    def update_user_password(self, user_id: int, password_hash: str) -> bool:
-        """Persists updated password hash to Supabase app_users table."""
+    def update_user_password(self, user_id: int, password_hash: str, email: Optional[str] = None) -> bool:
+        """Replace the password hash for this user. If email is set, update every
+        duplicate row with that email so old passwords cannot keep working."""
         with self._get_client() as client:
-            res = client.patch(
-                f"/rest/v1/app_users?id=eq.{user_id}",
-                json={"password_hash": password_hash},
-            )
-            return res.status_code in (200, 204)
+            if email:
+                encoded = quote(email.strip().lower(), safe="")
+                res = client.patch(
+                    f"/rest/v1/app_users?email=eq.{encoded}",
+                    json={"password_hash": password_hash},
+                )
+            else:
+                res = client.patch(
+                    f"/rest/v1/app_users?id=eq.{user_id}",
+                    json={"password_hash": password_hash},
+                )
+            if res.status_code not in (200, 204):
+                return False
+            check = client.get(f"/rest/v1/app_users?id=eq.{user_id}&select=password_hash")
+            if check.status_code != 200 or not check.json():
+                return False
+            stored = check.json()[0].get("password_hash")
+            return stored == password_hash
 
     def is_message_duplicate(self, wa_message_id: str) -> bool:
         if not wa_message_id:

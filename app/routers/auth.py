@@ -13,13 +13,10 @@ async def login(credentials: LoginRequest, response: Response):
     Authenticates conversation viewer and admin users.
     Sets secure HTTP-Only cookie 'session_token'.
     """
-    user_match = None
-    for u in db.app_users:
-        if u["email"].lower() == credentials.email.lower():
-            user_match = u
-            break
+    user_match = db.get_user_for_login(credentials.email)
 
-    # Strict bcrypt-only verification — no hardcoded bypasses
+    # Strict bcrypt-only verification against the current stored hash.
+    # Previous passwords are invalid as soon as the hash is replaced.
     valid = False
     if user_match and user_match.get("password_hash"):
         valid = verify_password(credentials.password, user_match["password_hash"])
@@ -114,10 +111,13 @@ async def change_password(
     user_id = int(user_payload.get("sub", 0)) if user_payload.get("sub") else None
 
     user_match = None
-    for u in db.app_users:
-        if (user_id and u.get("id") == user_id) or (email and u.get("email", "").lower() == email.lower()):
-            user_match = u
-            break
+    if user_id:
+        for u in db.app_users:
+            if u.get("id") == user_id:
+                user_match = u
+                break
+    if not user_match and email:
+        user_match = db.get_user_for_login(email)
 
     if not user_match:
         raise HTTPException(
@@ -145,11 +145,28 @@ async def change_password(
         )
 
     new_hash = get_password_hash(req.new_password)
-    if not db.update_user_password(user_match["id"], new_hash):
+    account_email = user_match.get("email") or email
+    if not db.update_user_password(user_match["id"], new_hash, email=account_email):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Password could not be saved. Please try again.",
         )
-    user_match["password_hash"] = new_hash
 
-    return {"success": True, "message": "Password updated successfully"}
+    # Confirm only the new password matches what is stored now
+    refreshed = db.get_user_for_login(account_email) if account_email else None
+    stored_hash = (refreshed or user_match).get("password_hash")
+    if not stored_hash or not verify_password(req.new_password, stored_hash):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Password was not replaced in the database",
+        )
+    if verify_password(req.current_password, stored_hash) and req.current_password != req.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Previous password was not expired. Please try again.",
+        )
+
+    return {
+        "success": True,
+        "message": "Password updated. The previous password will no longer work.",
+    }
