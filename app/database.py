@@ -27,21 +27,26 @@ class SupabaseDatabase:
     @property
     def conversations(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
-            deleted_conv_ids = set()
-            deleted_contact_ids = set()
-            del_res = client.get("/rest/v1/deleted_chats?select=conversation_id,contact_id")
+            deleted_by_conv: Dict[int, datetime] = {}
+            deleted_by_contact: Dict[int, datetime] = {}
+            del_res = client.get("/rest/v1/deleted_chats?select=conversation_id,contact_id,deleted_at")
             if del_res.status_code == 200:
                 for row in del_res.json():
+                    del_time = (
+                        datetime.fromisoformat(row["deleted_at"].replace('Z', '+00:00'))
+                        if row.get("deleted_at")
+                        else datetime.min.replace(tzinfo=timezone.utc)
+                    )
                     cid = row.get("conversation_id")
                     if cid is not None:
                         try:
-                            deleted_conv_ids.add(int(cid))
+                            deleted_by_conv[int(cid)] = del_time
                         except (ValueError, TypeError):
                             pass
                     cnt_id = row.get("contact_id")
                     if cnt_id is not None:
                         try:
-                            deleted_contact_ids.add(int(cnt_id))
+                            deleted_by_contact[int(cnt_id)] = del_time
                         except (ValueError, TypeError):
                             pass
 
@@ -50,15 +55,24 @@ class SupabaseDatabase:
                 data = res.json()
                 filtered = []
                 for c in data:
-                    if int(c["id"]) in deleted_conv_ids:
-                        continue
-                    if c.get("contact_id") is not None and int(c["contact_id"]) in deleted_contact_ids:
-                        continue
-                    c["started_at"] = datetime.fromisoformat(c["started_at"].replace('Z', '+00:00'))
-                    c["last_message_at"] = datetime.fromisoformat(c["last_message_at"].replace('Z', '+00:00'))
+                    started_dt = datetime.fromisoformat(c["started_at"].replace('Z', '+00:00'))
+                    last_msg_dt = datetime.fromisoformat(c["last_message_at"].replace('Z', '+00:00'))
+                    c["started_at"] = started_dt
+                    c["last_message_at"] = last_msg_dt
                     c["is_archived"] = bool(c.get("is_archived", False))
                     if c.get("archived_at"):
                         c["archived_at"] = datetime.fromisoformat(c["archived_at"].replace('Z', '+00:00'))
+
+                    conv_id = int(c["id"])
+                    cnt_id = int(c["contact_id"]) if c.get("contact_id") is not None else None
+
+                    # If this conversation or contact was deleted, check if a NEW message arrived after deletion
+                    del_time = deleted_by_conv.get(conv_id) or (deleted_by_contact.get(cnt_id) if cnt_id else None)
+                    if del_time is not None:
+                        # If no new message since deletion, hide it; if new message arrived after deletion, show it!
+                        if last_msg_dt <= del_time:
+                            continue
+
                     filtered.append(c)
                 return filtered
         return []
@@ -488,6 +502,11 @@ class SupabaseDatabase:
         now_iso = now_dt.isoformat()
 
         with self._get_client() as client:
+            try:
+                client.delete(f"/rest/v1/deleted_chats?contact_id=eq.{contact_id}")
+            except Exception:
+                pass
+
             res = client.get(
                 f"/rest/v1/conversations?contact_id=eq.{contact_id}&order=last_message_at.desc&limit=1"
             )
