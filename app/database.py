@@ -27,14 +27,21 @@ class SupabaseDatabase:
     @property
     def conversations(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
-            deleted_ids = set()
-            del_res = client.get("/rest/v1/deleted_chats?select=conversation_id")
+            deleted_conv_ids = set()
+            deleted_contact_ids = set()
+            del_res = client.get("/rest/v1/deleted_chats?select=conversation_id,contact_id")
             if del_res.status_code == 200:
                 for row in del_res.json():
                     cid = row.get("conversation_id")
                     if cid is not None:
                         try:
-                            deleted_ids.add(int(cid))
+                            deleted_conv_ids.add(int(cid))
+                        except (ValueError, TypeError):
+                            pass
+                    cnt_id = row.get("contact_id")
+                    if cnt_id is not None:
+                        try:
+                            deleted_contact_ids.add(int(cnt_id))
                         except (ValueError, TypeError):
                             pass
 
@@ -43,7 +50,9 @@ class SupabaseDatabase:
                 data = res.json()
                 filtered = []
                 for c in data:
-                    if int(c["id"]) in deleted_ids:
+                    if int(c["id"]) in deleted_conv_ids:
+                        continue
+                    if c.get("contact_id") is not None and int(c["contact_id"]) in deleted_contact_ids:
                         continue
                     c["started_at"] = datetime.fromisoformat(c["started_at"].replace('Z', '+00:00'))
                     c["last_message_at"] = datetime.fromisoformat(c["last_message_at"].replace('Z', '+00:00'))
@@ -64,6 +73,15 @@ class SupabaseDatabase:
         try:
             with self._get_client() as client:
                 now_iso = datetime.now(timezone.utc).isoformat()
+                if not contact_id:
+                    conv = self.get_conversation(conv_id)
+                    if conv and conv.get("contact_id"):
+                        contact_id = int(conv["contact_id"])
+                if contact_id and not wa_id:
+                    contact = self.get_contact(contact_id)
+                    if contact and contact.get("wa_id"):
+                        wa_id = contact["wa_id"]
+
                 row = {
                     "conversation_id": conv_id,
                     "contact_id": contact_id,
