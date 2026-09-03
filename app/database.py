@@ -170,6 +170,19 @@ class SupabaseDatabase:
                 latest[cid] = self._parse_message_row(row)
         return latest
 
+    def search_messages(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
+        clean = (query or "").strip()
+        if not clean:
+            return []
+        encoded = quote(clean, safe="")
+        with self._get_client() as client:
+            res = client.get(
+                f"/rest/v1/messages?body=ilike.*{encoded}*&select=*&order=sent_at.desc&limit={limit}"
+            )
+            if res.status_code in (200, 206):
+                return [self._parse_message_row(m) for m in res.json()]
+        return []
+
     @property
     def error_logs(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:

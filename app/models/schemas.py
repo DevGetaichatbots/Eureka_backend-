@@ -160,6 +160,12 @@ class ConversationDetailOut(BaseModel):
     messages: List[MessageOut]
 
 
+class MessageSearchResultOut(BaseModel):
+    message: MessageOut
+    conversation_id: int
+    contact: Optional[ContactOut] = None
+
+
 class ErrorLogOut(BaseModel):
     id: int
     conversation_id: Optional[int] = None

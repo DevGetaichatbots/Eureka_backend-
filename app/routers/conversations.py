@@ -6,12 +6,62 @@ from app.models.schemas import (
     ConversationDetailOut,
     ContactOut,
     MessageOut,
+    MessageSearchResultOut,
     PaginatedResponse,
 )
 from app.database import db
 from app.security import get_current_user_payload
 
 router = APIRouter(prefix="/api/conversations", tags=["Conversations Viewer"])
+
+
+@router.get("/messages/search", response_model=List[MessageSearchResultOut])
+async def search_messages_endpoint(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=100),
+    user_payload: dict = Depends(get_current_user_payload),
+):
+    """
+    Search messages across all conversations with attached contact info.
+    """
+    matched_msgs = db.search_messages(q, limit=limit)
+    contacts_by_id = {c["id"]: c for c in db.contacts}
+    results = []
+    for m in matched_msgs:
+        contact_dict = contacts_by_id.get(m.get("contact_id"))
+        contact_out = (
+            ContactOut(
+                id=contact_dict["id"],
+                wa_id=contact_dict["wa_id"],
+                profile_name=contact_dict.get("profile_name"),
+                first_seen_at=contact_dict["first_seen_at"],
+                last_seen_at=contact_dict["last_seen_at"],
+                message_count=contact_dict["message_count"],
+            )
+            if contact_dict
+            else None
+        )
+        msg_out = MessageOut(
+            id=m["id"],
+            conversation_id=m.get("conversation_id", 0),
+            contact_id=m["contact_id"],
+            wa_message_id=m.get("wa_message_id"),
+            direction=m["direction"],
+            body=m.get("body"),
+            msg_type=m.get("msg_type", "text"),
+            media_url=m.get("media_url"),
+            sent_at=m["sent_at"],
+            meta_status=m.get("meta_status", "sent"),
+            created_at=m["created_at"],
+        )
+        results.append(
+            MessageSearchResultOut(
+                message=msg_out,
+                conversation_id=m.get("conversation_id", 0),
+                contact=contact_out,
+            )
+        )
+    return results
 
 
 @router.get("", response_model=PaginatedResponse[ConversationOut])
@@ -31,6 +81,16 @@ async def list_conversations(
     contacts_by_id = {c["id"]: c for c in db.contacts}
     latest_by_conv = db.get_latest_messages_map()
 
+    matching_contact_ids = set()
+    matching_conv_ids = set()
+    if search:
+        matching_messages = db.search_messages(search, limit=200)
+        for m in matching_messages:
+            if m.get("contact_id"):
+                matching_contact_ids.add(m["contact_id"])
+            if m.get("conversation_id"):
+                matching_conv_ids.add(m["conversation_id"])
+
     for conv in db.conversations:
         contact_dict = contacts_by_id.get(conv["contact_id"])
         if not contact_dict:
@@ -49,7 +109,13 @@ async def list_conversations(
             q = search.lower()
             name = (contact_dict.get("profile_name") or "").lower()
             wa_id = (contact_dict.get("wa_id") or "").lower()
-            if q not in name and q not in wa_id:
+            is_matched = (
+                q in name
+                or q in wa_id
+                or conv["id"] in matching_conv_ids
+                or conv["contact_id"] in matching_contact_ids
+            )
+            if not is_matched:
                 continue
 
         last_msg = latest_by_conv.get(conv["id"])
