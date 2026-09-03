@@ -1,0 +1,205 @@
+[
+  {
+    "id": "86eyr60dn",
+    "name": "12. Chatbase migration, cutover &amp; handover (Day 5)",
+    "status": "to do",
+    "date_created": "1787735714015",
+    "date_updated": "1788165502785",
+    "description": "Part A · Day 5\n\nIncludes\nExport chat history + leads from Chatbase; import into Supabase (pull the export on Day 1 — format is unknown until we have it, and finding out on cutover day is how this slips)\nCutover to the production number; update the WhatsApp link on the website\nShort parallel run under live traffic before cancelling Chatbase\nCancel Chatbase only after the client confirms the new stack answers correctly\nAttach the old number to the same WABA so it routes to the same bot\nHandover: all credentials, tokens and connection strings in writing\nDocumentation: how the workflow is wired, how to read the error log, how to add a number\nWalkthrough call with the client\n\nOwnership check: Meta app, Supabase project, Render service and n8n workflows must all end up under the client's accounts. The dev Facebook account is for the sandbox only — the production app belongs in their Business Manager.\n\nDone when\nBot answers on WhatsApp with Chatbase fully removed\nAny conversation visible in the viewer within a minute\nMonthly cost = OpenAI + n8n + hosting only",
+    "comments": []
+  },
+  {
+    "id": "86eyr60a7",
+    "name": "11. Deploy to Render + keep-alive (Day 5)",
+    "status": "to do",
+    "date_created": "1787735708705",
+    "date_updated": "1787915712756",
+    "description": "Part A + B · Day 5 — only after task 10 passes locally\n\nSteps\nConnect the GitHub repo in Render → New Web Service\nRuntime Python 3.11. Build: pip install -r requirements.txt. Start: uvicorn app.main:app --host 0.0.0.0 --port $PORT\nAdd every variable from .env.example in the Render dashboard; set APP_BASE_URL to the Render URL\nHealth check path /health\nUpdate the Meta callback URL to https://<service>.onrender.com/webhook/whatsapp and re-verify\nLive test message — full round trip\n\n⚠️ Free-plan constraint. Render spins a free web service down after 15 minutes without inbound traffic, and spin-up takes ~1 minute. Since our app receives the Meta webhook, a sleeping service delays or drops the first message after a quiet period.\n\nMitigations\nExternal cron (cron-job.org / UptimeRobot) hitting /health every 10 minutes. One always-on service fits inside the 750 free instance-hours/month but consumes essentially all of them — keep to a single free service in the workspace\nwa_message_id dedup (task 4) is what prevents cold starts causing duplicate replies\nRecommend the paid instance before client cutover. Raise it before the first missed message, not after\n\nDo NOT use Render's free Postgres — it expires 30 days after creation. Our database is Supabase; Render hosts the app only.",
+    "comments": []
+  },
+  {
+    "id": "86eyr6055",
+    "name": "10. End-to-end test locally on test number (Day 5)",
+    "status": "to do",
+    "date_created": "1787735701506",
+    "date_updated": "1787915711064",
+    "description": "Part A + B · Day 5 — must pass before any deployment\n\nPart A checklist\nWebhook GET verification returns the challenge\nValid signature accepted, invalid rejected with 403\nAck under 300ms under load\nDuplicate wa_message_id processed exactly once\nInbound logged with correct contact + conversation\nn8n API receives payload and returns a reply\nReply reaches the customer's phone\nOutbound logged with Meta message ID\nNew conversation opens after a 24h gap\nn8n stopped → fallback sent, error logged\nInvalid Meta token → error logged with Meta's code\nNon-text message (image, voice) recorded by type, no crash\n\nPart B checklist\nUnauthenticated access redirects to login\nConversations newest first, counts and times correct\nThread renders in order, correct sides\nPhone-number search returns the right thread\nKeyword search matches bodies\nDate filter works alone and with search\nLeads unique, no duplicates\nCSV + XLSX open cleanly in Excel\nNew message visible in viewer within 60 seconds\nError log page lists a forced failure\nTimestamps display in Asia/Karachi",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zzu",
+    "name": "9. Search, leads, export &amp; error log page (Day 4)",
+    "status": "to do",
+    "date_created": "1787735692945",
+    "date_updated": "1787915709407",
+    "description": "Part B · Day 4\n\nIncludes\nGET /search — by phone number, and keyword across message bodies using the GIN full-text index\nDate filter (from/to), combinable with search\nGET /leads — unique contacts: number, name, first contact, last contact, message count\nGET /export/leads.csv and .xlsx — streams the current filtered result set, not everything\nGET /errors — recent error_log rows (step, message, time) for warranty-period support\nSimple user management page — create/disable viewer logins\n\nDone when\nKeyword search matches message bodies\nDate filter works alone and combined with search\nLeads view shows unique contacts, no duplicates\nCSV and XLSX both open cleanly in Excel",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zyd",
+    "name": "8. Auth &amp; viewer core — conversations + thread (Day 4)",
+    "status": "to do",
+    "date_created": "1787735689214",
+    "date_updated": "1787915707890",
+    "description": "Part B · Day 4\n\nPassword-protected web viewer. Server-rendered Jinja2, plain CSS, no build step, no CDN dependencies.\n\nIncludes\nGET/POST /login, /logout — sessions against app_users\nPassword hashing argon2 or bcrypt; rate-limit /login\nCookies HttpOnly, Secure, SameSite=Lax\nGET /conversations — newest first: number, WhatsApp name, last message time, message count. Paginated 50/page\nGET /conversations/{id} — full thread, WhatsApp-style bubbles: customer left, bot right, timestamps, day separators\nTimestamps displayed in Asia/Karachi\n\nDone when\nUnauthenticated access redirects to login\nList ordered correctly with accurate counts\nThread renders in order with correct sides\n\nRead-only: no reply box, no send-message endpoint for humans. Explicit client scope — do not add one.",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zwr",
+    "name": "7. Meta send &amp; error handling / fallback (Day 3)",
+    "status": "to do",
+    "date_created": "1787735685014",
+    "date_updated": "1787915706532",
+    "description": "Part A · Day 3\n\nSend the reply through the Cloud API, and guarantee no silent failures.\n\nIncludes\nmeta_client.py — POST /{phone_number_id}/messages, pinned META_API_VERSION\nRetry twice on send failure; store Meta's error code, not just the message\nWrite every failure to error_log with step (webhook/n8n/meta_send/db)\nFallback reply — customer always gets a graceful message, never silence. Reads like a person: \"Sorry, I'm having trouble answering right now. Please try again in a moment.\"\n60s watchdog — if no n8n callback arrives, log the timeout and send the fallback\nFallbacks are logged as outbound messages so they appear in the viewer thread\nDB unreachable must never block a customer reply — log to stdout so Render captures it\n\nDone when\nn8n stopped → customer receives fallback, error logged\nInvalid Meta token → error logged with Meta's code\nNo path exists where a customer message gets no response at all",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zvg",
+    "name": "6. Connect n8n API for bot replies (Day 3)",
+    "status": "to do",
+    "date_created": "1787735675443",
+    "date_updated": "1787915704711",
+    "description": "Part A · Day 3 — the core integration\n\nThe bot is already built and trained in n8n. We are not rebuilding it. This task connects our application to the n8n API so the trained bot's reply reaches WhatsApp.\n\nApp → n8n (POST {N8N_WEBHOOK_URL})\n{\n  \"conversation_id\": 4812,\n  \"wa_id\": \"923001234567\",\n  \"profile_name\": \"Ahmed\",\n  \"message\": \"Do you deliver to Lahore?\",\n  \"message_id\": \"wamid.HBgM...\",\n  \"callback_url\": \"https://<app>/internal/reply\"\n}\nNo prompt, no model settings, no knowledge sources in this payload — n8n owns all of it.\n\nn8n → App (POST /internal/reply, header X-Callback-Secret)\n{ \"conversation_id\": 4812, \"wa_id\": \"923001234567\", \"text\": \"...\", \"status\": \"ok\" }\n\nIncludes\nn8n_client.py dispatch with 3× retry, exponential backoff (2s/4s/8s)\n/internal/reply endpoint guarded by N8N_CALLBACK_SECRET, constant-time compare\nCallback pattern, not a synchronous call — OpenAI latency is unbounded and a blocked worker produces duplicate replies\n\n⚠️ BLOCKER — settle on Day 1, in writing. Confirm with whoever owns the workflow: (1) production webhook URL, (2) whether it accepts our field names or needs a mapping node, (3) whether memory keys on conversation_id or wa_id. Getting this wrong is the most likely cause of a lost day.",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zuf",
+    "name": "5. Message logging &amp; conversation windowing (Day 2)",
+    "status": "to do",
+    "date_created": "1787735668568",
+    "date_updated": "1787915700905",
+    "description": "Part A + B · Day 2\n\nPersist every message in both directions. This is the foundation of the whole viewer.\n\nIncludes\nContact upsert on wa_id; update profile_name, last_seen_at, message_count\n24-hour conversation windowing: if the contact's latest conversation has last_message_at within 24h, append to it; otherwise open a new conversation row. Keep the 24h constant in config.py, not scattered through the code\nInbound persistence: direction customer, Meta timestamp, message type\nOutbound persistence: direction bot, Meta message ID from the send response\nMaintain message_count and last_message_at counters\n\nDone when\nInbound message appears in messages with correct contact + conversation\nA message after a 24h gap opens a new conversation\nAll timestamps stored UTC (timestamptz)",
+    "comments": []
+  },
+  {
+    "id": "86eyr5ztr",
+    "name": "4. Webhook receiver — verify, HMAC, dedup, fast ack (Day 1)",
+    "status": "to do",
+    "date_created": "1787735664130",
+    "date_updated": "1787915702481",
+    "description": "Part A · Day 1\n\nThe app — not n8n — receives the Meta webhook.\n\nIncludes\nGET /webhook/whatsapp — compare hub.verify_token, return hub.challenge as plain text, else 403\nPOST /webhook/whatsapp — verify X-Hub-Signature-256 HMAC-SHA256 over the raw request body (before any JSON parsing — re-serialised JSON will not match), constant-time compare\nDe-duplicate on wa_message_id: duplicates return 200 and do nothing\nSchedule background work, return 200 immediately — target under 300ms\nParse text and non-text messages (image, voice) without crashing\n\nDone when\nValid signature accepted, invalid rejected with 403\nAck under 300ms under load\nMeta retry of the same message is processed exactly once\n\nWhy it matters: idempotency here is what stops a Render cold start turning into duplicate replies to a real customer.",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zqh",
+    "name": "3. Meta app setup on dev Facebook account (Day 1)",
+    "status": "to do",
+    "date_created": "1787735656324",
+    "date_updated": "1787915699489",
+    "description": "Part A · Day 1 — start this first, it is the longest external dependency\n\nSteps\ndevelopers.facebook.com → create app, type Business\nAdd the WhatsApp product (provisions a test number + sandbox WABA)\nRecord Phone number ID and WABA ID\nBusiness Settings → create a System User, assign the WABA as an asset, generate a permanent token with whatsapp_business_messaging + whatsapp_business_management (the dashboard token expires in 24h — do not rely on it)\nWhatsApp → Configuration: set Callback URL to {tunnel}/webhook/whatsapp and the Verify token\nSubscribe the webhook to the messages field — without this, verification goes green and no messages ever arrive\nAdd each developer's personal WhatsApp number as an approved test recipient\n\nDone when\nWebhook verification succeeds\nA message sent from an approved number reaches our local endpoint\n\nNote: the production app must ultimately live in the client's Business Manager (ownership clause in the proposal). Dev account is for the sandbox only.",
+    "comments": []
+  },
+  {
+    "id": "86eyr5znf",
+    "name": "2. Supabase schema &amp; migrations (Day 1)",
+    "status": "to do",
+    "date_created": "1787735650534",
+    "date_updated": "1787915697947",
+    "description": "Part A + B · Day 1\n\nCreate the Postgres schema in Supabase.\n\nTables\ncontacts — wa_id (unique), profile_name, first_seen_at, last_seen_at, message_count\nconversations — contact_id, started_at, last_message_at, message_count\nmessages — conversation_id, contact_id, wa_message_id (unique), direction ('customer'/'bot'), body, msg_type, media_url, sent_at, meta_status\nerror_log — conversation_id, wa_id, inbound_body, step, error_text, payload jsonb\napp_users — email, password_hash (argon2/bcrypt), role, last_login_at\n\nNOTE: no bot_config and no knowledge_sources table. The bot is trained in n8n and n8n owns its prompt, model and sources.\n\nIndexes\nmessages (conversation_id, sent_at desc), messages (contact_id, sent_at desc)\nconversations (last_message_at desc)\nGIN full-text on to_tsvector('english', body) — required for keyword search\nerror_log (created_at desc)\n\nDone when\nmigrations/001_init.sql runs clean in the Supabase SQL editor\nSeed script creates the first admin user\nApp connects from local via DATABASE_URL",
+    "comments": []
+  },
+  {
+    "id": "86eyr5zkr",
+    "name": "1. Repo &amp; FastAPI skeleton (Day 1)",
+    "status": "to do",
+    "date_created": "1787735645090",
+    "date_updated": "1787915696401",
+    "description": "Part A · Day 1\n\nSet up the GitHub repo so anyone can clone it and run the project locally without asking for missing pieces.\n\nIncludes\nRepo structure: app/ (routers, services, db, templates, static), migrations/, tests/\nFastAPI app + Uvicorn, router registration\napp/config.py — Pydantic Settings for all env vars, fails fast if any required var is missing\nGET /health returning 200 + DB ping\nREADME.md with full local setup (clone → venv → install → .env → migrate → run → tunnel)\n.env.example with every variable, placeholder values, committed\n.gitignore must include .env\n\nDone when\nClean clone + README steps → app runs locally on port 8000\n/health returns 200\nNo secrets anywhere in the repo",
+    "comments": []
+  },
+  {
+    "id": "86eyr5uk2",
+    "name": "Process Details",
+    "status": "to do",
+    "date_created": "1787734816192",
+    "date_updated": "1787918742240",
+    "description": "Make Sure you setup Staging and Production Environments setup\nSeparate Databases and separate envs for both",
+    "comments": [
+      {
+        "user": "Muhammad Ahmad",
+        "text": "eurekajo.app.n8n.cloud/webhook/eurekajo-chatbot-workflow \n \n"
+      },
+      {
+        "user": "Abdullah ek",
+        "text": "@Usama Yousaf"
+      },
+      {
+        "user": "Abdullah ek",
+        "text": "Technical-Build-Document.pdfPlease review this setup\n"
+      }
+    ]
+  },
+  {
+    "id": "86eyr5t4z",
+    "name": "Access Details",
+    "status": "to do",
+    "date_created": "1787734514617",
+    "date_updated": "1787915692910",
+    "description": "Supasbase:\nabd_eurekajo86@getaichatbots.com\nAbd_ek8866\n\n\n\nRender Login:\nadmin@eurekajo.com\nAim#igh@1448\n \nDatabase Password: \nSucce$$needsH@rdW0rk\n   \nOPENAI API:\n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 (CHANGED)\n \n Chatbot Postman Collection:\nhttps://drive.google.com/file/d/1ZDss1KgZNG8NenlGwRr-oNYYgKhSS-3T/view?usp=sharing\n \nAPI Documentation Link:\nhttps://drive.google.com/file/d/17iU-2kVojzjpBGe3uHI2p-XKrIi9reO4/view?usp=sharing\n \nChatbase:\nhttps://www.chatbase.co/dashboard/eureka-jordan/chatbot/kDmCTTNrHYc0oZCOFRUHb/playground\nabd_eurekajo86@getaichatbots.com\nGetai.9871\n \n\nN8N:\nhttps://eurekajo.app.n8n.cloud/home/workflows\nabd_eurekajo86@getaichatbots.com\nGetai.9871\n\nGithub Login:\ndev@getaichatbots.com\ngoodbooks.86\n\nFacebook Credentials:\ndev@getaichatbots.com\nGetai.9871\nMeta Application Access on Dev Facebook account(Ahmed will Provide this)\nAccount Name: EurekaJo\nApplication Link : https://developers.facebook.com/apps/1587149902942521/use_cases/customize/wa-dev-console/?use_case_enum=WHATSAPP_BUSINESS_MESSAGING&selected_tab=wa-dev-console&product_route=whatsapp-business&business_id=712650883154548 \n\nTesting Number to send Message on : +15556712685\nGet Your Receiving Number from Ahmed Link in your Whatsapp",
+    "comments": []
+  },
+  {
+    "id": "86eyqkaxq",
+    "name": "Accesses & Credentials (Phase 1)",
+    "status": "to do",
+    "date_created": "1787573900938",
+    "date_updated": "1787662227513",
+    "description": "Access Details & Credentials\n\nSiteGround Hosting Access\nPurpose: Web hosting platform for Phase 1 deployment\nPlatform: SiteGround\nEmail/Username: regeneraproperties@gmail.com\nPassword: David2020\nDomain: www.regeneraproperties.com\n\nImportant Security Note: Ensure developer/cPanel access is created separately for security purposes instead of using main account credentials directly.",
+    "comments": [
+      {
+        "user": "M yousaf imran",
+        "text": "Brokerage CRM DESIGN (1).pdf\n"
+      }
+    ]
+  },
+  {
+    "id": "86eyqkavn",
+    "name": "ReGen Era Properties - Phase 1: CRM Foundation (Developer Task)",
+    "status": "to do",
+    "date_created": "1787573888171",
+    "date_updated": "1787662220070",
+    "description": "ReGen Era Properties - Custom Brokerage CRM System\nPHASE 1: CRM Foundation\n\nProject Scope: Custom-built Brokerage CRM for managing the complete customer lifecycle for real estate operations.\n\nLocation: Jamaica | Website: www.regeneraproperties.com\n\nPHASE 1 DELIVERABLES (Core Features Only)\n\n1. Secure Authentication & User Management\nRole-based login system (Agent, Dealer/Manager, Admin)\nAccount validation and password recovery\nLicense verification for agents\nAudit logging of all login attempts\nUser status tracking\n\n2. Executive Dashboard\nPurpose: Personalized command center answering \"What needs my attention today?\"\n\nDashboard Display Sections:\nToday's Priorities\nFollow-ups due today\nCallbacks due today\nOverdue tasks\nNew leads assigned\nPending client requests\nUpcoming viewings\nUpcoming open houses\nMini Calendar (Multiple Views: Daily, Weekly, Monthly, Yearly)\nShows: Calls, Callbacks, Property Viewings, Open Houses, Meetings, Consultations, Tasks\nMy Tasks (with filters)\nToday, Upcoming, Overdue, Completed filters\nTask cards showing: Task name, Client type, Due date, Status\nPerformance Summary\nAgent View: Leads Assigned, Leads Contacted, Calls Made, Emails Sent, Viewings Completed, Open Houses Hosted, Deals Closed\nManager View: Team Performance, Lead Distribution, Conversion Rate\nCustomer Alerts\nClient waiting for response\nCallback overdue\nKYC incomplete\nDocument expired\nNo activity for X days\nQuick Actions (Large action buttons)\nCreate Lead\nAdd Customer\nSchedule Callback\nSchedule Viewing\nSchedule Open House\nCreate Task\nUpload Document\n\n3. Lead Management\nLead Capture Fields:\nName, Phone, Email\nCountry, Parish/State\nLead Source (Website, Instagram, Facebook, WhatsApp, Google, Referral, Open House, Developer, Attorney, Bank, Walk-in)\nCampaign Name\nLead Status (New, Contacted, Qualified, Converted, Lost)\nLead Temperature (Hot, Warm, Cold)\nAssigned Agent with Assignment Date\n\nFeatures:\nOverdue follow-up alerts for leads without agent action\nAutomatic tracking of lead status progression\n\n4. Customer Profiles\nCustomer Profile Header:\nName (with proper display format)\nCustomer Type (list of options)\nAssigned Agent\nLead Status\nPriority Level\nCustomer Since Date\nKYC Status\n\nQuick Communication Buttons:\nCall, WhatsApp, Email, SMS (direct from profile)\n\nCustomer Journey Tracker (Visual Pipeline):\nNew Lead → Contacted → Qualified → Viewing → Offer → Attorney → Closing → Completed\nOne-click status updates with automatic date/time recording\n\nCustomer Tabs & Information:\n\nTab 1: Customer Details\nName, Phone, Email, Address\nCountry, Parish/State, City, Time Zone\n\nTab 2: Client Classification\nClient Type (Residential / Commercial / Mixed)\nResidential Information (conditional display):\nRole (Multi-select: Buyer, Seller, Renter, Buyer & Seller)\nProperty Requirements (Type: House, Apartment, Townhouse, Land)\nBudget, Preferred Areas\nFinancing Type (Cash, NHT, Bank)\nTimeline\nQuick Actions: Schedule Viewing, Schedule Open House, Request Valuation, Mortgage Referral, Legal Referral\nCommercial Information (conditional display):\nCompany Profile (Company Name, Type, Industry, TRN)\nContact Person (Name, Position, Phone, Email)\nRequirements (Property Type: Office, Retail, Warehouse, Industrial, Land)\nPurchase/Lease, Size Requirement, Budget, Preferred Locations\nQuick Actions: Site Visit, Valuation, Legal Referral, Due Diligence Request\n\nTab 3: Communication Timeline\nSingle unified history tracking:\nCalls, WhatsApp, Email, SMS\nNotes, Internal Messages, Documents\nStatus Changes\nEach record shows: Date, Time, User, Activity Type, Summary, Attachment\n\nTab 4: Activity History\nShows: Tasks completed, Viewings, Open Houses, Callbacks, Meetings\n\nTab 5: Audit Trail\nPermanent record of: Login, Changes, Reassignments, Deletions, Approvals\n\n5. Activities & Task Management\nActivity Types:\nCustomer Communication: Callback, Phone Call, Email, WhatsApp Follow-up\nProperty Activities: Viewing, Open House, Site Visit, Consultation\nInternal Activities: Meeting, Training, Task Assignment\n\nActivity Fields:\nActivity Type, Customer, Property\nAssigned User, Date, Time\nPriority, Notes, Status\nStatuses: Pending, Completed, Cancelled, Overdue\n\n6. Calendar Module\nCalendar Views:\nMonthly, Weekly, Daily, Agenda\n\nCalendar Displays:\nCallbacks, Calls, Viewings, Open Houses, Meetings, Tasks, Consultations\n\nFeatures:\nDrag and drop scheduling\nReminder alerts\nAutomatic sync of activities from customer profiles\n\n7. Basic Analytics & Reporting\nAccess Levels:\nAgent: Own performance only\nDealer/Manager: Team performance\nAdmin: Full company analytics\n\nKey Metrics:\nLead Performance: Lead Sources, Conversion Rates, Lead Response Time\nActivity Performance: Calls, Emails, WhatsApp, Follow-ups\nSales Performance: Revenue, Pipeline, Closed Transactions\nMarketing Performance: Open House Results, Campaign Performance\nCompliance: KYC Completion, Expiring Documents\n\nExport Formats: CSV, PDF\n\nDeployment Details\nHosting: SiteGround (Client's existing hosting)\nDomain: www.regeneraproperties.com\nAccess: Browser-based, accessible from any device\n\nIMPORTANT WORKFLOW CONNECTIONS\n\nCustomer Profile → Activities\nCreating callback, viewing, open house, task, or reminder from customer profile\nActivities → Calendar\nEvery scheduled activity automatically appears on calendar\nCalendar → Dashboard\nToday's activities appear automatically on dashboard\nLeads → Customer Profile\nConverted leads become customer records\nCustomer Profile → Analytics\nAll interactions automatically feed into reporting\n\nIMPLEMENTATION APPROACH\n\nDevelopment Focus\nBuild core features for immediate usability\nEnsure system architecture is clean and maintainable\nPrepare system for future phase integrations\nNo hard deletes - use soft delete with approval trails\nComprehensive audit logging of all actions\n\nData Security\nAll actions logged with user/timestamp\nRole-based access control strictly enforced\nNo data loss - soft delete only with reason tracking\nDaily backups to cloud storage\n\nQuality Assurance\nComplete testing of all Phase 1 features\nValidation of all user workflows\nPerformance optimization for multi-user access\nSecurity audit before deployment\n\nDELIVERABLES AT END OF PHASE 1\n\n✅ Fully functional CRM system with all Phase 1 features\n✅ Deployed on client's SiteGround hosting at www.regeneraproperties.com\n✅ All user roles configured and tested\n✅ Database optimized and backed up\n✅ Comprehensive documentation\n✅ Video walkthroughs (Loom) for each feature\n✅ Live training session with client team",
+    "comments": [
+      {
+        "user": "M yousaf imran",
+        "text": "david2clarke-attachments.zip\n"
+      },
+      {
+        "user": "M yousaf imran",
+        "text": "Brokerage CRM DESIGN (1).pdf\n"
+      }
+    ]
+  },
+  {
+    "id": "86eyne6fe",
+    "name": "Process Details",
+    "status": "to do",
+    "date_created": "1786964850870",
+    "date_updated": "1787566445028",
+    "description": "Funnel link:\nhttps://zfrmz.com/zi5vnJme9gnCV2GYTUsT \n\n\nGoogle Process Document to Follow:\nhttps://docs.google.com/document/d/1YTQ8XA8amBi3v3J0IQte4P5pTwbtY58W/edit?pli=1 \n\nCSV Data to Import After All data is added:\nCustom Fields will be taken from this CSV:\nhttps://drive.google.com/drive/folders/19bWFMsemkdz9T5GqYnfb8HYEWhECwOK2 \n\nCompany Knowledge Base:\nhttps://drive.google.com/drive/folders/1TRXXCNeyhJwsyodqR5Zd0yVdjkgZlt9J?usp=sharing",
+    "comments": [
+      {
+        "user": "Abdullah ek",
+        "text": "1- Funnel Creation\n2- Pipeline Creation and stages\n3- Custom Fields Finalize FroM CV and Funnel page\n\n@ameerhamza"
+      },
+      {
+        "user": "Abdullah ek",
+        "text": "GHL_WorldWideScholarships_TechnicalScope.pdfPlease check this @Muhammad Fazil"
+      }
+    ]
+  },
+  {
+    "id": "86eyj1dxb",
+    "name": "Access Details",
+    "status": "access details",
+    "date_created": "1786018373842",
+    "date_updated": "1787566451094",
+    "description": "GHL\nAccount on Dev WorldWideScholarShip\nhttps://app.gohighlevel.com/onboarding/v1\n\nghi@worldwidescholarships.com\nWorldWSghl@8866\n\n\nServer Login: mbox.server274.com\nghi@worldwidescholarships.com\nhUxxu4-kabkij-fogdyc\n\nZoho Login:\nUser name: adminsa@worldwidescholarships.com\nPassword: Zoho1979#\n\n\nhttps://hotpink-oryx-407440.hostingersite.com/settings/usage \nghi@worldwidescholarships.com\nGetai8866",
+    "comments": [
+      {
+        "user": "Abdullah ek",
+        "text": "image.png\n\nPaystack Details\n"
+      }
+    ]
+  }
+]
