@@ -155,13 +155,46 @@ class SupabaseDatabase:
     @property
     def contacts(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
+            deleted_by_contact: Dict[int, datetime] = {}
+            deleted_by_wa: Dict[str, datetime] = {}
+            del_res = client.get("/rest/v1/deleted_chats?select=contact_id,wa_id,deleted_at")
+            if del_res.status_code == 200:
+                for row in del_res.json():
+                    del_time = (
+                        datetime.fromisoformat(row["deleted_at"].replace('Z', '+00:00'))
+                        if row.get("deleted_at")
+                        else datetime.min.replace(tzinfo=timezone.utc)
+                    )
+                    cnt_id = row.get("contact_id")
+                    if cnt_id is not None:
+                        try:
+                            deleted_by_contact[int(cnt_id)] = del_time
+                        except (ValueError, TypeError):
+                            pass
+                    wa = row.get("wa_id")
+                    if wa:
+                        deleted_by_wa[str(wa)] = del_time
+
             res = client.get("/rest/v1/contacts?select=*")
             if res.status_code == 200:
                 data = res.json()
+                filtered = []
                 for c in data:
-                    c["first_seen_at"] = datetime.fromisoformat(c["first_seen_at"].replace('Z', '+00:00'))
-                    c["last_seen_at"] = datetime.fromisoformat(c["last_seen_at"].replace('Z', '+00:00'))
-                return data
+                    first_seen = datetime.fromisoformat(c["first_seen_at"].replace('Z', '+00:00'))
+                    last_seen = datetime.fromisoformat(c["last_seen_at"].replace('Z', '+00:00'))
+                    c["first_seen_at"] = first_seen
+                    c["last_seen_at"] = last_seen
+
+                    cnt_id = int(c["id"]) if c.get("id") is not None else None
+                    wa = str(c.get("wa_id", ""))
+                    del_time = deleted_by_contact.get(cnt_id) or deleted_by_wa.get(wa)
+                    if del_time is not None:
+                        # If contact has not sent a new message since deletion, hide from leads list
+                        if last_seen <= del_time:
+                            continue
+
+                    filtered.append(c)
+                return filtered
         return []
 
     def _parse_message_row(self, m: Dict[str, Any]) -> Dict[str, Any]:
