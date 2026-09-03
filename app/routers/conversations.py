@@ -250,7 +250,7 @@ async def get_conversation_detail(
 
 @router.post("/{id}/archive")
 @router.patch("/{id}/archive")
-async def archive_conversation_endpoint(
+async def toggle_archive_conversation_endpoint(
     id: int,
     payload: Optional[Dict[str, Any]] = None,
     user_payload: dict = Depends(get_current_user_payload),
@@ -258,6 +258,11 @@ async def archive_conversation_endpoint(
     """
     Archives or unarchives a conversation persistently in Supabase database.
     """
+    if user_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required to archive conversations",
+        )
     is_archived = True
     chat_user_name = None
     wa_id = None
@@ -302,6 +307,11 @@ async def delete_conversation_endpoint(
     """
     Hides/deletes a conversation across all users permanently without hard-deleting messages.
     """
+    if user_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required to delete conversations",
+        )
     contact_id = None
     wa_id = None
     deleted_by_user = user_payload.get("email") or "admin@eurekajo.com" if isinstance(user_payload, dict) else "admin@eurekajo.com"
