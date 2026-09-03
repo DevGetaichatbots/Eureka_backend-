@@ -14,23 +14,28 @@ async def login(credentials: LoginRequest, response: Response):
     Sets secure HTTP-Only cookie 'session_token'.
     """
     user_match = db.get_user_for_login(credentials.email)
-
-    # Strict bcrypt-only verification against the current stored hash.
-    # Previous passwords are invalid as soon as the hash is replaced.
-    valid = False
-    if user_match and user_match.get("password_hash"):
-        valid = verify_password(credentials.password, user_match["password_hash"])
-
-    if not user_match or not valid:
+    if not user_match:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
 
+    # Check if disabled first to give clear feedback
     if user_match.get("status") == "disabled":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account is disabled. Please contact an administrator.",
+        )
+
+    # Strict bcrypt-only verification against the current stored hash.
+    valid = False
+    if user_match.get("password_hash"):
+        valid = verify_password(credentials.password, user_match["password_hash"])
+
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
         )
 
     # Update last login in memory AND persist to Supabase
