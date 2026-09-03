@@ -156,6 +156,8 @@ async def list_conversations(
                 last_message_at=conv["last_message_at"],
                 message_count=conv["message_count"],
                 last_message=last_msg_out,
+                is_archived=conv.get("is_archived", False),
+                archived_at=conv.get("archived_at"),
             )
         )
 
@@ -170,12 +172,13 @@ async def list_conversations(
     conv_list.sort(key=lambda c: c.last_message_at, reverse=True)
 
     total = len(conv_list)
-    start_idx = (page - 1) * limit
-    paged_items = conv_list[start_idx : start_idx + limit]
+    start = (page - 1) * limit
+    end = start + limit
+    paginated_items = conv_list[start:end]
     total_pages = max(1, (total + limit - 1) // limit)
 
     return PaginatedResponse(
-        items=paged_items,
+        items=paginated_items,
         total=total,
         page=page,
         limit=limit,
@@ -238,6 +241,30 @@ async def get_conversation_detail(
         started_at=conv["started_at"],
         last_message_at=conv["last_message_at"],
         message_count=conv["message_count"],
+        is_archived=conv.get("is_archived", False),
+        archived_at=conv.get("archived_at"),
     )
 
     return ConversationDetailOut(conversation=conv_out, messages=messages_out)
+
+
+@router.post("/{id}/archive")
+@router.patch("/{id}/archive")
+async def archive_conversation_endpoint(
+    id: int,
+    payload: Optional[Dict[str, Any]] = None,
+    user_payload: dict = Depends(get_current_user_payload),
+):
+    """
+    Archives or unarchives a conversation persistently in Supabase database.
+    """
+    is_archived = True
+    if payload and "is_archived" in payload:
+        is_archived = bool(payload["is_archived"])
+    success = db.archive_conversation(id, is_archived=is_archived)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update archive status for conversation #{id}",
+        )
+    return {"success": True, "id": id, "is_archived": is_archived}

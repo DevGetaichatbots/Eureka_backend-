@@ -153,6 +153,8 @@ class ConversationOut(BaseModel):
     last_message_at: datetime
     message_count: int
     last_message: Optional[MessageOut] = None
+    is_archived: bool = False
+    archived_at: Optional[datetime] = None
 
 
 class ConversationDetailOut(BaseModel):

@@ -33,8 +33,20 @@ class SupabaseDatabase:
                 for c in data:
                     c["started_at"] = datetime.fromisoformat(c["started_at"].replace('Z', '+00:00'))
                     c["last_message_at"] = datetime.fromisoformat(c["last_message_at"].replace('Z', '+00:00'))
+                    c["is_archived"] = bool(c.get("is_archived", False))
+                    if c.get("archived_at"):
+                        c["archived_at"] = datetime.fromisoformat(c["archived_at"].replace('Z', '+00:00'))
                 return data
         return []
+
+    def archive_conversation(self, conv_id: int, is_archived: bool = True) -> bool:
+        with self._get_client() as client:
+            now_iso = datetime.now(timezone.utc).isoformat() if is_archived else None
+            res = client.patch(
+                f"/rest/v1/conversations?id=eq.{conv_id}",
+                json={"is_archived": is_archived, "archived_at": now_iso},
+            )
+            return res.status_code in (200, 204)
 
     @property
     def contacts(self) -> List[Dict[str, Any]]:
