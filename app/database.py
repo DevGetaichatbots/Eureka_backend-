@@ -346,15 +346,19 @@ class SupabaseDatabase:
     @property
     def app_users(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
-            res = client.get("/rest/v1/app_users?select=*")
+            res = client.get("/rest/v1/app_users?status=neq.deleted&select=*&order=id.asc")
             if res.status_code == 200:
                 data = res.json()
+                filtered = []
                 for u in data:
+                    if u.get("status") == "deleted":
+                        continue
                     if u.get("created_at"):
                         u["created_at"] = datetime.fromisoformat(u["created_at"].replace('Z', '+00:00'))
                     if u.get("last_login_at"):
                         u["last_login_at"] = datetime.fromisoformat(u["last_login_at"].replace('Z', '+00:00'))
-                return data
+                    filtered.append(u)
+                return filtered
         return []
 
     def get_users_by_email(self, email: str) -> List[Dict[str, Any]]:
@@ -369,6 +373,7 @@ class SupabaseDatabase:
             if res.status_code != 200:
                 return []
             data = res.json() or []
+            data = [u for u in data if u.get("status") != "deleted"]
             for u in data:
                 if u.get("created_at") and isinstance(u["created_at"], str):
                     u["created_at"] = datetime.fromisoformat(u["created_at"].replace("Z", "+00:00"))
@@ -390,16 +395,37 @@ class SupabaseDatabase:
             )
 
     def create_user(self, email: str, password_hash: str, role: str, status: str = "active") -> Dict[str, Any]:
-        """Creates a new app user directly in Supabase."""
+        """Creates a new app user directly in Supabase or revives a previously deleted account."""
         now_iso = datetime.now(timezone.utc).isoformat()
-        new_row = {
-            "email": email.strip().lower(),
-            "password_hash": password_hash,
-            "role": role,
-            "status": status,
-            "created_at": now_iso,
-        }
+        clean_email = email.strip().lower()
+        encoded = quote(clean_email, safe="")
+
         with self._get_client() as client:
+            # Check if a deleted user with this email exists in Supabase
+            existing_res = client.get(f"/rest/v1/app_users?email=eq.{encoded}&select=*&limit=1")
+            if existing_res.status_code == 200 and len(existing_res.json()) > 0:
+                exist_id = existing_res.json()[0]["id"]
+                up_res = client.patch(
+                    f"/rest/v1/app_users?id=eq.{exist_id}",
+                    json={
+                        "password_hash": password_hash,
+                        "role": role,
+                        "status": status,
+                    },
+                )
+                payload = client.get(f"/rest/v1/app_users?id=eq.{exist_id}&select=*").json()
+                created = payload[0] if payload else existing_res.json()[0]
+                if created.get("created_at"):
+                    created["created_at"] = datetime.fromisoformat(created["created_at"].replace('Z', '+00:00'))
+                return created
+
+            new_row = {
+                "email": clean_email,
+                "password_hash": password_hash,
+                "role": role,
+                "status": status,
+                "created_at": now_iso,
+            }
             res = client.post("/rest/v1/app_users", json=[new_row])
             if res.status_code in (200, 201) and res.json():
                 created = res.json()[0]
@@ -441,9 +467,12 @@ class SupabaseDatabase:
         return None
 
     def delete_user(self, user_id: int) -> bool:
-        """Deletes a user account from Supabase."""
+        """Soft-deletes a user by setting status to 'deleted'. Preserves 100% of data in Supabase."""
         with self._get_client() as client:
-            res = client.delete(f"/rest/v1/app_users?id=eq.{user_id}")
+            res = client.patch(
+                f"/rest/v1/app_users?id=eq.{user_id}",
+                json={"status": "deleted"},
+            )
             return res.status_code in (200, 204)
 
     def update_user_password(self, user_id: int, password_hash: str, email: Optional[str] = None) -> bool:
