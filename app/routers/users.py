@@ -17,6 +17,11 @@ class UpdateUserRequest(BaseModel):
 @router.get("", response_model=List[UserOut])
 async def list_users(user_payload: dict = Depends(get_current_user_payload)):
     """Returns all team members directly from Supabase"""
+    if user_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required",
+        )
     return [
         UserOut(
             id=u["id"],
@@ -50,12 +55,24 @@ async def create_user(
         )
 
     pwd_hash = get_password_hash(req.password)
-    created = db.create_user(
-        email=req.email,
-        password_hash=pwd_hash,
-        role=req.role,
-        status="active",
-    )
+    try:
+        created = db.create_user(
+            email=req.email,
+            password_hash=pwd_hash,
+            role=req.role,
+            status="active",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+
+    if not created.get("id"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User was not saved to the database",
+        )
 
     return UserOut(
         id=created["id"],
@@ -75,6 +92,11 @@ async def update_user(
     user_payload: dict = Depends(get_current_user_payload),
 ):
     """Updates user status or role in Supabase"""
+    if user_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required to update users",
+        )
     update_data = {}
     if req.status is not None:
         update_data["status"] = req.status
@@ -105,6 +127,11 @@ async def update_user_status(
     user_payload: dict = Depends(get_current_user_payload),
 ):
     """Enables or disables a user account in Supabase"""
+    if user_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required to update users",
+        )
     updated = db.update_user(id, {"status": req.status})
     if not updated:
         raise HTTPException(
@@ -128,6 +155,11 @@ async def delete_user(
     user_payload: dict = Depends(get_current_user_payload),
 ):
     """Deletes a user account from Supabase"""
+    if user_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privilege required to delete users",
+        )
     if id == 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

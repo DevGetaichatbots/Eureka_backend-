@@ -54,6 +54,19 @@ class SupabaseDatabase:
             m["created_at"] = datetime.fromisoformat(m["created_at"].replace("Z", "+00:00"))
         return m
 
+    def count_messages(self) -> int:
+        with self._get_client() as client:
+            res = client.get(
+                "/rest/v1/messages?select=id",
+                headers={"Prefer": "count=exact", "Range": "0-0"},
+            )
+            content_range = res.headers.get("content-range") or res.headers.get("Content-Range")
+            if content_range and "/" in content_range:
+                total = content_range.split("/")[-1]
+                if total.isdigit():
+                    return int(total)
+        return len(self.messages)
+
     @property
     def messages(self) -> List[Dict[str, Any]]:
         with self._get_client() as client:
@@ -179,10 +192,14 @@ class SupabaseDatabase:
             res = client.post("/rest/v1/app_users", json=[new_row])
             if res.status_code in (200, 201) and res.json():
                 created = res.json()[0]
+                if created.get("id") is None:
+                    raise RuntimeError("User insert returned no id")
                 if created.get("created_at"):
                     created["created_at"] = datetime.fromisoformat(created["created_at"].replace('Z', '+00:00'))
                 return created
-        return new_row
+            raise RuntimeError(
+                f"Failed to create user in database ({res.status_code}): {res.text[:400]}"
+            )
 
     def update_user(self, user_id: int, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Updates user status, role, or other fields in Supabase."""
@@ -191,13 +208,25 @@ class SupabaseDatabase:
                 f"/rest/v1/app_users?id=eq.{user_id}",
                 json=update_data,
             )
-            if res.status_code in (200, 204) and res.json():
-                updated = res.json()[0]
-                if updated.get("created_at"):
-                    updated["created_at"] = datetime.fromisoformat(updated["created_at"].replace('Z', '+00:00'))
-                if updated.get("last_login_at"):
-                    updated["last_login_at"] = datetime.fromisoformat(updated["last_login_at"].replace('Z', '+00:00'))
-                return updated
+            if res.status_code not in (200, 204):
+                return None
+            payload = []
+            try:
+                if res.content:
+                    payload = res.json()
+            except Exception:
+                payload = []
+            if not payload:
+                refetch = client.get(f"/rest/v1/app_users?id=eq.{user_id}&select=*")
+                payload = refetch.json() if refetch.status_code == 200 else []
+            if not payload:
+                return None
+            updated = payload[0]
+            if updated.get("created_at"):
+                updated["created_at"] = datetime.fromisoformat(updated["created_at"].replace('Z', '+00:00'))
+            if updated.get("last_login_at"):
+                updated["last_login_at"] = datetime.fromisoformat(updated["last_login_at"].replace('Z', '+00:00'))
+            return updated
         return None
 
     def delete_user(self, user_id: int) -> bool:

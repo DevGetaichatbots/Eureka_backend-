@@ -145,7 +145,11 @@ async def change_password(
         )
 
     new_hash = get_password_hash(req.new_password)
+    if not db.update_user_password(user_match["id"], new_hash):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Password could not be saved. Please try again.",
+        )
     user_match["password_hash"] = new_hash
-    db.update_user_password(user_match["id"], new_hash)
 
     return {"success": True, "message": "Password updated successfully"}
