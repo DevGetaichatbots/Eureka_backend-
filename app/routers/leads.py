@@ -21,7 +21,7 @@ async def get_leads_summary(user_payload: dict = Depends(get_current_user_payloa
     active_24h_count = sum(
         1 for c in contacts if (now - c["last_seen_at"]) <= timedelta(hours=24)
     )
-    total_messages = sum(message_counts.values())
+    total_messages = sum(message_counts.get(c["id"], 0) for c in contacts)
 
     leads_out = [
         ContactOut(

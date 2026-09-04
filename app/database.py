@@ -281,22 +281,42 @@ class SupabaseDatabase:
 
     def get_messages_for_contact(self, contact_id: int) -> List[Dict[str, Any]]:
         with self._get_client() as client:
+            del_time = None
+            del_res = client.get(f"/rest/v1/deleted_chats?contact_id=eq.{contact_id}&order=deleted_at.desc&limit=1")
+            if del_res.status_code == 200 and del_res.json():
+                del_str = del_res.json()[0].get("deleted_at")
+                if del_str:
+                    del_time = datetime.fromisoformat(del_str.replace("Z", "+00:00"))
+
             res = client.get(
                 f"/rest/v1/messages?contact_id=eq.{contact_id}&select=*&order=id.asc",
                 headers={"Range": "0-9998"},
             )
             if res.status_code in (200, 206):
-                return [self._parse_message_row(m) for m in res.json()]
+                all_msgs = [self._parse_message_row(m) for m in res.json()]
+                if del_time:
+                    return [m for m in all_msgs if m["sent_at"] > del_time]
+                return all_msgs
         return []
 
     def get_messages_for_conversation(self, conversation_id: int) -> List[Dict[str, Any]]:
         with self._get_client() as client:
+            del_time = None
+            del_res = client.get(f"/rest/v1/deleted_chats?conversation_id=eq.{conversation_id}&order=deleted_at.desc&limit=1")
+            if del_res.status_code == 200 and del_res.json():
+                del_str = del_res.json()[0].get("deleted_at")
+                if del_str:
+                    del_time = datetime.fromisoformat(del_str.replace("Z", "+00:00"))
+
             res = client.get(
                 f"/rest/v1/messages?conversation_id=eq.{conversation_id}&select=*&order=id.asc",
                 headers={"Range": "0-9998"},
             )
             if res.status_code in (200, 206):
-                return [self._parse_message_row(m) for m in res.json()]
+                all_msgs = [self._parse_message_row(m) for m in res.json()]
+                if del_time:
+                    return [m for m in all_msgs if m["sent_at"] > del_time]
+                return all_msgs
         return []
 
     def get_conversation(self, conversation_id: int) -> Optional[Dict[str, Any]]:
@@ -590,11 +610,6 @@ class SupabaseDatabase:
         now_iso = now_dt.isoformat()
 
         with self._get_client() as client:
-            try:
-                client.delete(f"/rest/v1/deleted_chats?contact_id=eq.{contact_id}")
-            except Exception:
-                pass
-
             res = client.get(
                 f"/rest/v1/conversations?contact_id=eq.{contact_id}&order=last_message_at.desc&limit=1"
             )

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Query, HTTPException, status, Depends
+from fastapi import APIRouter, Query, HTTPException, status, Depends, Body
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from app.models.schemas import (
     ConversationOut,
     ConversationDetailOut,
@@ -234,20 +234,6 @@ async def get_conversation_detail(
             detail=f"Conversation #{id} not found",
         )
 
-    contact_dict = db.get_contact(conv["contact_id"])
-    contact_out = (
-        ContactOut(
-            id=contact_dict["id"],
-            wa_id=contact_dict["wa_id"],
-            profile_name=contact_dict.get("profile_name"),
-            first_seen_at=contact_dict["first_seen_at"],
-            last_seen_at=contact_dict["last_seen_at"],
-            message_count=contact_dict["message_count"],
-        )
-        if contact_dict
-        else None
-    )
-
     thread_messages = db.get_messages_for_contact(conv["contact_id"])
 
     messages_out = [
@@ -267,13 +253,30 @@ async def get_conversation_detail(
         for m in thread_messages
     ]
 
+    active_count = len(messages_out)
+    first_active_time = messages_out[0].sent_at if messages_out else conv["started_at"]
+
+    contact_dict = db.get_contact(conv["contact_id"])
+    contact_out = None
+    if contact_dict:
+        # If there are active messages after deletion, reflect the active start timestamp & count
+        contact_first_seen = first_active_time if active_count > 0 else contact_dict["first_seen_at"]
+        contact_out = ContactOut(
+            id=contact_dict["id"],
+            wa_id=contact_dict["wa_id"],
+            profile_name=contact_dict.get("profile_name"),
+            first_seen_at=contact_first_seen,
+            last_seen_at=contact_dict["last_seen_at"],
+            message_count=active_count if active_count > 0 else contact_dict.get("message_count", 0),
+        )
+
     conv_out = ConversationOut(
         id=conv["id"],
         contact_id=conv["contact_id"],
         contact=contact_out,
-        started_at=conv["started_at"],
+        started_at=first_active_time,
         last_message_at=conv["last_message_at"],
-        message_count=conv["message_count"],
+        message_count=active_count,
         is_archived=conv.get("is_archived", False),
         archived_at=conv.get("archived_at"),
     )
@@ -334,7 +337,9 @@ async def toggle_archive_conversation_endpoint(
 @router.delete("/{id}")
 async def delete_conversation_endpoint(
     id: int,
-    payload: Optional[Dict[str, Any]] = None,
+    contact_id: Optional[int] = Query(None),
+    wa_id: Optional[str] = Query(None),
+    payload: Optional[Dict[str, Any]] = Body(None),
     user_payload: dict = Depends(get_current_user_payload),
 ):
     """
@@ -345,13 +350,16 @@ async def delete_conversation_endpoint(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privilege required to delete conversations",
         )
-    contact_id = None
-    wa_id = None
     deleted_by_user = user_payload.get("email") or "admin@eurekajo.com" if isinstance(user_payload, dict) else "admin@eurekajo.com"
 
     if payload:
-        contact_id = payload.get("contact_id")
-        wa_id = payload.get("wa_id")
+        if not contact_id and payload.get("contact_id"):
+            try:
+                contact_id = int(payload["contact_id"])
+            except (ValueError, TypeError):
+                pass
+        if not wa_id and payload.get("wa_id"):
+            wa_id = str(payload["wa_id"])
         if payload.get("deleted_by_user"):
             deleted_by_user = payload["deleted_by_user"]
 
