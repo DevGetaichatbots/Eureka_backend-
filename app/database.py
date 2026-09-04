@@ -192,6 +192,9 @@ class SupabaseDatabase:
                         # If contact has not sent a new message since deletion, hide from leads list
                         if last_seen <= del_time:
                             continue
+                        # If contact started a new conversation after deletion, update first_seen to restart time
+                        if first_seen <= del_time:
+                            c["first_seen_at"] = del_time
 
                     filtered.append(c)
                 return filtered
@@ -218,14 +221,30 @@ class SupabaseDatabase:
         return len(self.messages)
 
     def get_message_counts_by_contact(self) -> Dict[int, int]:
-        """Actual message rows per contact — same source as the conversation thread."""
+        """Actual active message rows per contact — excluding messages prior to deletion cutoff."""
         counts: Dict[int, int] = {}
         page_size = 1000
         offset = 0
         with self._get_client() as client:
+            deleted_by_contact: Dict[int, datetime] = {}
+            del_res = client.get("/rest/v1/deleted_chats?select=contact_id,deleted_at")
+            if del_res.status_code == 200:
+                for row in del_res.json():
+                    del_time = (
+                        datetime.fromisoformat(row["deleted_at"].replace('Z', '+00:00'))
+                        if row.get("deleted_at")
+                        else datetime.min.replace(tzinfo=timezone.utc)
+                    )
+                    cnt_id = row.get("contact_id")
+                    if cnt_id is not None:
+                        try:
+                            deleted_by_contact[int(cnt_id)] = del_time
+                        except (ValueError, TypeError):
+                            pass
+
             while offset < 100000:
                 res = client.get(
-                    "/rest/v1/messages?select=contact_id",
+                    "/rest/v1/messages?select=contact_id,sent_at",
                     headers={"Range": f"{offset}-{offset + page_size - 1}"},
                 )
                 if res.status_code not in (200, 206):
@@ -236,6 +255,13 @@ class SupabaseDatabase:
                     if cid is None:
                         continue
                     cid_int = int(cid)
+                    del_time = deleted_by_contact.get(cid_int)
+                    if del_time:
+                        sent_at_str = row.get("sent_at")
+                        if sent_at_str:
+                            sent_at_dt = datetime.fromisoformat(sent_at_str.replace('Z', '+00:00'))
+                            if sent_at_dt <= del_time:
+                                continue
                     counts[cid_int] = counts.get(cid_int, 0) + 1
                 if len(rows) < page_size:
                     break
