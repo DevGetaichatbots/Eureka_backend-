@@ -137,6 +137,13 @@ class SupabaseDatabase:
                     if contact and contact.get("wa_id"):
                         wa_id = contact["wa_id"]
 
+                # Remove older deletion records first to prevent PostgreSQL 23505 unique constraint errors
+                client.delete(f"/rest/v1/deleted_chats?conversation_id=eq.{conv_id}")
+                if contact_id:
+                    client.delete(f"/rest/v1/deleted_chats?contact_id=eq.{contact_id}")
+                if wa_id:
+                    client.delete(f"/rest/v1/deleted_chats?wa_id=eq.{wa_id}")
+
                 row = {
                     "conversation_id": conv_id,
                     "contact_id": contact_id,
@@ -147,7 +154,6 @@ class SupabaseDatabase:
                 client.post(
                     "/rest/v1/deleted_chats",
                     json=[row],
-                    headers={"Prefer": "resolution=merge-duplicates"},
                 )
                 return True
         except Exception as e:
