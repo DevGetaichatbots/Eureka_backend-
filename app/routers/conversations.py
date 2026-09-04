@@ -106,12 +106,13 @@ async def list_conversations(
         if not contact_dict:
             continue
 
-        # Active 24h filter
+        # Window / Status filter ('all' = open chats + archived with is_archived flag, 'active' = open 24h active, 'archived' = archived only)
+        is_conv_archived = bool(conv.get("is_archived", False))
         delta = now - conv["last_message_at"]
         is_active = delta <= timedelta(hours=24)
-        if window == "active" and not is_active:
+        if window == "archived" and not is_conv_archived:
             continue
-        if window == "archived" and is_active:
+        if window == "active" and (is_conv_archived or not is_active):
             continue
 
         # Date Range Filtering based on latest activity (last_message_at)

@@ -50,6 +50,36 @@ class SupabaseDatabase:
                         except (ValueError, TypeError):
                             pass
 
+            # Query archived chats table from Supabase
+            archived_conv_ids: set[int] = set()
+            archived_contact_ids: set[int] = set()
+            archived_wa_ids: set[str] = set()
+            archived_dates: Dict[int, datetime] = {}
+            arch_res = client.get("/rest/v1/archived_chats?select=conversation_id,contact_id,wa_id,archived_at")
+            if arch_res.status_code == 200:
+                for row in arch_res.json():
+                    cid = row.get("conversation_id")
+                    if cid is not None:
+                        try:
+                            archived_conv_ids.add(int(cid))
+                        except (ValueError, TypeError):
+                            pass
+                    cnt_id = row.get("contact_id")
+                    if cnt_id is not None:
+                        try:
+                            archived_contact_ids.add(int(cnt_id))
+                        except (ValueError, TypeError):
+                            pass
+                    wa = row.get("wa_id")
+                    if wa:
+                        archived_wa_ids.add(str(wa))
+                    arch_at = row.get("archived_at")
+                    if arch_at and cid is not None:
+                        try:
+                            archived_dates[int(cid)] = datetime.fromisoformat(arch_at.replace('Z', '+00:00'))
+                        except (ValueError, TypeError):
+                            pass
+
             res = client.get("/rest/v1/conversations?select=*&order=last_message_at.desc")
             if res.status_code == 200:
                 data = res.json()
@@ -59,9 +89,6 @@ class SupabaseDatabase:
                     last_msg_dt = datetime.fromisoformat(c["last_message_at"].replace('Z', '+00:00'))
                     c["started_at"] = started_dt
                     c["last_message_at"] = last_msg_dt
-                    c["is_archived"] = bool(c.get("is_archived", False))
-                    if c.get("archived_at"):
-                        c["archived_at"] = datetime.fromisoformat(c["archived_at"].replace('Z', '+00:00'))
 
                     conv_id = int(c["id"])
                     cnt_id = int(c["contact_id"]) if c.get("contact_id") is not None else None
@@ -72,6 +99,20 @@ class SupabaseDatabase:
                         # If no new message since deletion, hide it; if new message arrived after deletion, show it!
                         if last_msg_dt <= del_time:
                             continue
+
+                    # Database archive state check
+                    is_arch = (
+                        conv_id in archived_conv_ids
+                        or (cnt_id is not None and cnt_id in archived_contact_ids)
+                        or bool(c.get("is_archived", False))
+                    )
+                    c["is_archived"] = is_arch
+                    if conv_id in archived_dates:
+                        c["archived_at"] = archived_dates[conv_id]
+                    elif c.get("archived_at"):
+                        c["archived_at"] = datetime.fromisoformat(c["archived_at"].replace('Z', '+00:00'))
+                    else:
+                        c["archived_at"] = None
 
                     filtered.append(c)
                 return filtered
@@ -127,6 +168,15 @@ class SupabaseDatabase:
         try:
             with self._get_client() as client:
                 now_iso = datetime.now(timezone.utc).isoformat()
+                if not contact_id:
+                    conv = self.get_conversation(conv_id)
+                    if conv and conv.get("contact_id"):
+                        contact_id = int(conv["contact_id"])
+                if contact_id and not wa_id:
+                    contact = self.get_contact(contact_id)
+                    if contact and contact.get("wa_id"):
+                        wa_id = contact["wa_id"]
+
                 if is_archived:
                     # Upsert into archived_chats table
                     archived_row = {
@@ -147,6 +197,8 @@ class SupabaseDatabase:
                 else:
                     # Delete from archived_chats table on unarchive
                     client.delete(f"/rest/v1/archived_chats?conversation_id=eq.{conv_id}")
+                    if contact_id:
+                        client.delete(f"/rest/v1/archived_chats?contact_id=eq.{contact_id}")
                 return True
         except Exception as e:
             print(f"Supabase archive error: {e}")
@@ -326,6 +378,21 @@ class SupabaseDatabase:
                 conv = res.json()[0]
                 conv["started_at"] = datetime.fromisoformat(conv["started_at"].replace("Z", "+00:00"))
                 conv["last_message_at"] = datetime.fromisoformat(conv["last_message_at"].replace("Z", "+00:00"))
+
+                # Check archived_chats table
+                cnt_id = conv.get("contact_id")
+                arch_query = f"/rest/v1/archived_chats?or=(conversation_id.eq.{conversation_id}"
+                if cnt_id:
+                    arch_query += f",contact_id.eq.{cnt_id}"
+                arch_query += ")&select=archived_at&limit=1"
+
+                arch_res = client.get(arch_query)
+                if arch_res.status_code == 200 and arch_res.json():
+                    conv["is_archived"] = True
+                    arch_at = arch_res.json()[0].get("archived_at")
+                    conv["archived_at"] = datetime.fromisoformat(arch_at.replace("Z", "+00:00")) if arch_at else None
+                else:
+                    conv["is_archived"] = bool(conv.get("is_archived", False))
                 return conv
         return None
 
