@@ -289,7 +289,7 @@ async def get_conversation_detail(
 @router.patch("/{id}/archive")
 async def toggle_archive_conversation_endpoint(
     id: int,
-    payload: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = Body(None),
     user_payload: dict = Depends(get_current_user_payload),
 ):
     """
