@@ -70,16 +70,26 @@ async def list_conversations(
     limit: int = Query(50, ge=1, le=100),
     window: str = Query("all"),  # 'all' | 'active' | 'archived'
     search: Optional[str] = Query(None),
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    date_range: Optional[str] = Query(None),  # 'today' | 'yesterday' | '3' | '7' | '30' | 'custom'
+    sort: Optional[str] = Query("newest"),  # 'newest' | 'oldest'
     user_payload: dict = Depends(get_current_user_payload),
 ):
     """
     Returns paginated list of conversations with attached contact info
     and last message snippet for the inbox feed.
+    Supports search, status window, date range filtering, and sorting.
     """
     now = datetime.now(timezone.utc)
     conv_list = []
     contacts_by_id = {c["id"]: c for c in db.contacts}
     latest_by_conv = db.get_latest_messages_map()
+
+    # Timezone-aware date calculations for Asia/Karachi (UTC+5)
+    karachi_offset = timezone(timedelta(hours=5))
+    today_karachi = datetime.now(karachi_offset).strftime("%Y-%m-%d")
+    yesterday_karachi = (datetime.now(karachi_offset) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     matching_contact_ids = set()
     matching_conv_ids = set()
@@ -103,6 +113,27 @@ async def list_conversations(
             continue
         if window == "archived" and is_active:
             continue
+
+        # Date Range Filtering based on latest activity (last_message_at)
+        last_dt = conv["last_message_at"]
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        conv_date_str = last_dt.astimezone(karachi_offset).strftime("%Y-%m-%d")
+
+        if date_range == "today" and conv_date_str != today_karachi:
+            continue
+        elif date_range == "yesterday" and conv_date_str != yesterday_karachi:
+            continue
+        elif date_range in ("3", "7", "30"):
+            num_days = int(date_range)
+            cutoff_date = (datetime.now(karachi_offset) - timedelta(days=num_days - 1)).strftime("%Y-%m-%d")
+            if conv_date_str < cutoff_date:
+                continue
+        elif from_date or to_date or date_range == "custom":
+            if from_date and conv_date_str < from_date:
+                continue
+            if to_date and conv_date_str > to_date:
+                continue
 
         # Search filter
         if search:
@@ -161,15 +192,17 @@ async def list_conversations(
             )
         )
 
-    conv_list.sort(key=lambda c: c.last_message_at, reverse=True)
+    # Sort conversations (newest first or oldest first)
+    is_reverse = (sort != "oldest")
+    conv_list.sort(key=lambda c: c.last_message_at, reverse=is_reverse)
 
     unique_by_contact: Dict[int, ConversationOut] = {}
     for item in conv_list:
         existing = unique_by_contact.get(item.contact_id)
-        if not existing or item.last_message_at > existing.last_message_at:
+        if not existing or (item.last_message_at > existing.last_message_at if is_reverse else item.last_message_at < existing.last_message_at):
             unique_by_contact[item.contact_id] = item
     conv_list = list(unique_by_contact.values())
-    conv_list.sort(key=lambda c: c.last_message_at, reverse=True)
+    conv_list.sort(key=lambda c: c.last_message_at, reverse=is_reverse)
 
     total = len(conv_list)
     start = (page - 1) * limit
