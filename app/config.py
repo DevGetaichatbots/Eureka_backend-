@@ -55,8 +55,9 @@ class Settings(BaseSettings):
     APP_BASE_URL: str = "https://eureka-backend-6dh0.onrender.com"
 
     # Error Fallback & Reliability (Section 9)
+    # Customer-facing, so it must be Arabic like the rest of the bot.
     FALLBACK_MESSAGE: str = (
-        "Sorry, I'm having trouble answering right now. Please try again in a moment."
+        "عذراً، صار عندي خلل تقني بسيط. ممكن تبعتلي رسالتك مرة ثانية؟"
     )
     WATCHDOG_TIMEOUT_SECONDS: int = 50
     ADMIN_NOTIFICATION_PHONE: Optional[str] = "962790000000"

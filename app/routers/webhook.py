@@ -1,10 +1,10 @@
 import json
 from fastapi import APIRouter, Request, Response, BackgroundTasks, HTTPException, status, Query
+from starlette.concurrency import run_in_threadpool
 from app.config import settings
 from app.security import verify_meta_signature
 from app.database import db
 from app.services.conversation_service import conversation_service
-from app.services.meta_service import meta_service
 
 router = APIRouter(prefix="/webhook", tags=["Meta WhatsApp Webhook"])
 
@@ -80,8 +80,13 @@ async def receive_meta_webhook(
                 msg_type = msg.get("type", "text")
                 timestamp_str = msg.get("timestamp")
 
-                # De-duplication check (Idempotency)
-                if wa_message_id and db.is_message_duplicate(wa_message_id):
+                # De-duplication (Idempotency).
+                # Single atomic claim - see db.claim_message. Checking first and marking
+                # afterwards used to race: Meta delivers the same message twice a few
+                # milliseconds apart and both copies passed the check.
+                # Run off the event loop: the claim ends in a blocking Supabase lookup and
+                # this route owes Meta an acknowledgement in under 300ms.
+                if not await run_in_threadpool(db.claim_message, wa_message_id):
                     print(f"[Webhook Idempotency] Skipping already-processed message: {wa_message_id}")
                     continue
 
@@ -102,14 +107,8 @@ async def receive_meta_webhook(
                 else:
                     message_body = f"[{msg_type} attachment]"
 
-                # Mark processed immediately to prevent racing duplicate webhook delivery
-                if wa_message_id:
-                    db.mark_message_processed(wa_message_id)
-                    background_tasks.add_task(
-                        meta_service.mark_message_as_read,
-                        wa_message_id,
-                    )
-
+                # The read receipt is sent by handle_inbound_message; queueing it here as
+                # well made two Meta API calls for every inbound message.
                 background_tasks.add_task(
                     conversation_service.handle_inbound_message,
                     wa_id=from_wa_id,

@@ -1,5 +1,8 @@
 import os
+import time
+import threading
 import httpx
+from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote
@@ -11,6 +14,11 @@ class SupabaseDatabase:
     Production/Staging Supabase PostgREST Database Client.
     Executes live persistent CRUD operations directly against Supabase PostgreSQL.
     """
+    # Meta can deliver the same webhook more than once. Claimed ids are remembered for a
+    # few hours so a late redelivery is still recognised, and capped so memory stays bounded.
+    CLAIM_TTL_SECONDS = 6 * 60 * 60
+    CLAIM_MAX_ENTRIES = 20000
+
     def __init__(self):
         self.supabase_url = settings.SUPABASE_URL.rstrip('/')
         self.headers = {
@@ -19,6 +27,8 @@ class SupabaseDatabase:
             "Content-Type": "application/json",
             "Prefer": "return=representation",
         }
+        self._claimed_messages: "OrderedDict[str, float]" = OrderedDict()
+        self._claim_lock = threading.Lock()
 
     def _get_client(self) -> httpx.Client:
         return httpx.Client(base_url=self.supabase_url, headers=self.headers, timeout=10.0)
@@ -626,8 +636,60 @@ class SupabaseDatabase:
                 return True
         return False
 
-    def mark_message_processed(self, wa_message_id: str):
-        pass
+    def _prune_claims(self, now: float) -> None:
+        """Caller must hold _claim_lock."""
+        cutoff = now - self.CLAIM_TTL_SECONDS
+        while self._claimed_messages:
+            _, claimed_at = next(iter(self._claimed_messages.items()))
+            if claimed_at >= cutoff and len(self._claimed_messages) <= self.CLAIM_MAX_ENTRIES:
+                break
+            self._claimed_messages.popitem(last=False)
+
+    def claim_message(self, wa_message_id: str) -> bool:
+        """
+        Atomically claim a wa_message_id for processing.
+
+        Returns True if this caller won the claim and should process the message, False if
+        it is a duplicate delivery that must be dropped.
+
+        This replaces the old check-then-act pair (`is_message_duplicate` followed by
+        `mark_message_processed`). That pattern raced: `is_message_duplicate` queries the
+        `messages` table, but the inbound row is not inserted until later inside the
+        background task, so two deliveries arriving milliseconds apart both saw "not a
+        duplicate" and both were dispatched to n8n.
+
+        The in-process claim closes that window. The database lookup stays as a second line
+        of defence for redeliveries that arrive after a restart.
+        """
+        if not wa_message_id:
+            return True
+
+        now = time.monotonic()
+        with self._claim_lock:
+            self._prune_claims(now)
+            if wa_message_id in self._claimed_messages:
+                return False
+            self._claimed_messages[wa_message_id] = now
+
+        # Only the winner reaches the (slower) durable check.
+        try:
+            if self.is_message_duplicate(wa_message_id):
+                return False
+        except Exception as exc:
+            # A Supabase hiccup must not drop a real customer message; the in-process
+            # claim above has already prevented the duplicate-dispatch case.
+            print(f"[Idempotency] durable duplicate check failed for {wa_message_id}: {exc}")
+
+        return True
+
+    def mark_message_processed(self, wa_message_id: str) -> None:
+        """Record a wa_message_id as already handled, so a later claim is rejected."""
+        if not wa_message_id:
+            return
+        now = time.monotonic()
+        with self._claim_lock:
+            self._prune_claims(now)
+            self._claimed_messages[wa_message_id] = now
 
     def upsert_contact(self, wa_id: str, profile_name: Optional[str] = None) -> Dict[str, Any]:
         now_dt = datetime.now(timezone.utc)

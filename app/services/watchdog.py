@@ -23,10 +23,8 @@ class ReplyWatchdog:
         wa_message_id: str,
         inbound_text: str,
     ):
-        """Starts 60-second watchdog timer for this message"""
-        # Cancel any existing watchdog for the same message ID
-        if wa_message_id in self.pending_tasks:
-            self.pending_tasks[wa_message_id].cancel()
+        """Starts the reply watchdog timer for this message"""
+        previous = self.pending_tasks.get(wa_message_id)
 
         task = asyncio.create_task(
             self._timeout_handler(
@@ -37,7 +35,13 @@ class ReplyWatchdog:
                 timeout=settings.WATCHDOG_TIMEOUT_SECONDS,
             )
         )
+        # Install the replacement BEFORE cancelling the old timer. `cancel()` only flags the
+        # task; its `finally` runs later on the event loop, and if the dict still pointed at
+        # the old entry that cleanup would delete whichever timer is live at that moment.
         self.pending_tasks[wa_message_id] = task
+
+        if previous is not None and not previous.done():
+            previous.cancel()
 
     def resolve_reply(self, wa_message_id: Optional[str], to_wa_id: Optional[str] = None):
         """Cancels watchdog timer when n8n reply callback is received"""
@@ -90,7 +94,12 @@ class ReplyWatchdog:
             # Successfully cancelled because n8n replied in time
             pass
         finally:
-            self.pending_tasks.pop(wa_message_id, None)
+            # Only clear the slot if it still belongs to this task. A duplicate webhook
+            # delivery replaces the entry, and a cancelled timer must not evict its
+            # replacement - that used to leave a live timer nobody could cancel, which
+            # fired the fallback 60s later even after n8n had answered correctly.
+            if self.pending_tasks.get(wa_message_id) is asyncio.current_task():
+                self.pending_tasks.pop(wa_message_id, None)
 
 
 watchdog = ReplyWatchdog()
