@@ -19,6 +19,11 @@ class SupabaseDatabase:
     CLAIM_TTL_SECONDS = 6 * 60 * 60
     CLAIM_MAX_ENTRIES = 20000
 
+    # A burst of identical media from one customer gets a single canned answer. Observed
+    # bursts arrive 2-5s apart; 15s covers them while still answering someone who genuinely
+    # sends a second voice note after reading the first reply.
+    MEDIA_REPLY_WINDOW_SECONDS = 15
+
     def __init__(self):
         self.supabase_url = settings.SUPABASE_URL.rstrip('/')
         self.headers = {
@@ -28,6 +33,7 @@ class SupabaseDatabase:
             "Prefer": "return=representation",
         }
         self._claimed_messages: "OrderedDict[str, float]" = OrderedDict()
+        self._media_replies: "OrderedDict[str, float]" = OrderedDict()
         self._claim_lock = threading.Lock()
 
     def _get_client(self) -> httpx.Client:
@@ -690,6 +696,38 @@ class SupabaseDatabase:
         with self._claim_lock:
             self._prune_claims(now)
             self._claimed_messages[wa_message_id] = now
+
+    def claim_media_reply(self, wa_id: str, msg_type: str) -> bool:
+        """
+        Rate-limit the canned "I can't read that" answer to one per burst.
+
+        Customers often fire several voice notes or photos in a row. Each one is a separate
+        message, so each one earned its own identical apology - conversation 302 received
+        three within five seconds. Nothing was broken, it just read badly.
+
+        Returns True if this message should be answered, False if an identical answer has
+        already gone out to this customer moments ago.
+
+        Keyed per message type, so a voice note followed by a photo still gets both answers;
+        only a run of the same kind is collapsed.
+        """
+        if not wa_id:
+            return True
+
+        key = f"{wa_id}:{(msg_type or '').lower()}"
+        now = time.monotonic()
+        with self._claim_lock:
+            last_sent = self._media_replies.get(key)
+            if last_sent is not None and (now - last_sent) < self.MEDIA_REPLY_WINDOW_SECONDS:
+                return False
+            self._media_replies[key] = now
+            # Bounded: drop anything older than the window, oldest first.
+            while self._media_replies:
+                _, sent_at = next(iter(self._media_replies.items()))
+                if (now - sent_at) < self.MEDIA_REPLY_WINDOW_SECONDS and len(self._media_replies) <= self.CLAIM_MAX_ENTRIES:
+                    break
+                self._media_replies.popitem(last=False)
+        return True
 
     def upsert_contact(self, wa_id: str, profile_name: Optional[str] = None) -> Dict[str, Any]:
         now_dt = datetime.now(timezone.utc)

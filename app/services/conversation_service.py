@@ -1,11 +1,18 @@
+import re
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+from app.database import db
 from app.services.conversation import conversation_service as conv_engine
 from app.services.message_log import message_log_service
 from app.services.meta_service import meta_service
 from app.services.n8n_client import n8n_client
 from app.services.watchdog import watchdog
 from app.models.schemas import N8NDispatchPayload
+
+# Bodies the webhook substitutes when there is nothing readable to act on, e.g.
+# "[Voice Note message]" or "[Photo message]". A photo WITH a caption arrives as the
+# caption instead - that is real intent and must always reach the bot.
+_PLACEHOLDER_BODY = re.compile(r"\s*\[[^\]]*\]\s*\Z")
 
 
 class InboundPipelineCoordinator:
@@ -46,6 +53,19 @@ class InboundPipelineCoordinator:
             media_url=media_url,
             meta_status="delivered",
         )
+
+        # A run of identical unreadable media earns one canned answer, not one each.
+        # The message is still stored above, so the CRM shows every voice note the
+        # customer sent - only the repeated apology is suppressed. No dispatch and no
+        # watchdog here, so this can never produce a fallback either.
+        if _PLACEHOLDER_BODY.match(message_body or "") and not db.claim_media_reply(wa_id, msg_type):
+            print(f"[Media Debounce] Suppressing repeat {msg_type} reply to {wa_id}")
+            return {
+                "contact": contact,
+                "conversation": conversation,
+                "message": inbound_msg,
+                "dispatched": False,
+            }
 
         dispatch_payload = N8NDispatchPayload(
             wa_id=wa_id,
