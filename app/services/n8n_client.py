@@ -18,6 +18,22 @@ class N8NClient:
     - Captures synchronous webhook response (both JSON dict & plain string)
     """
 
+    # How long one dispatch attempt may wait for n8n's synchronous reply.
+    #
+    # This sits INSIDE the reply watchdog and must stay comfortably below it, otherwise a
+    # single hung attempt burns the whole watchdog budget and the customer is apologised to
+    # while the real answer is still on its way. That is exactly what happened while both
+    # were 60s: n8n answered at 74s, the watchdog had already fired at 60s.
+    #
+    # It also must stay ABOVE the slowest legitimate n8n run, or we abandon a workflow that
+    # is about to succeed and retry it - which produces a duplicate reply. Measured over 141
+    # executions: median 8.8s, p95 21.4s, max 41.2s.
+    #
+    #   n8n -> OpenAI (per call)   20s   (n8n node: timeout 20000, maxRetries 1)
+    #   backend -> n8n (per try)   45s   <- this value
+    #   reply watchdog             90s   (WATCHDOG_TIMEOUT_SECONDS)
+    REQUEST_TIMEOUT_SECONDS = 45.0
+
     def __init__(self):
         self.webhook_url = settings.N8N_WEBHOOK_URL
         self.max_retries = 3
@@ -59,7 +75,7 @@ class N8NClient:
         for attempt in range(1, self.max_retries + 1):
             try:
                 print(f"[n8n Client] Dispatching message {data['message_id']} to n8n (attempt {attempt}/{self.max_retries})...")
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                async with httpx.AsyncClient(timeout=self.REQUEST_TIMEOUT_SECONDS) as client:
                     response = await client.post(self.webhook_url, json=data, headers=headers)
 
                 if response.is_success:
