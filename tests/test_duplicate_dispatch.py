@@ -47,6 +47,10 @@ def _isolate_watchdog(monkeypatch, recorder, timeout=TIMEOUT):
 
     monkeypatch.setattr(watchdog_module.meta_service, "send_text_message", fake_send_text_message)
     monkeypatch.setattr(watchdog_module.db, "log_error", fake_log_error)
+    # These tests are about the timer, not about the one-apology-per-message guard, and
+    # they deliberately reuse a single wa_message_id. Let every fallback through so the
+    # guard (covered in test_dispatch_retry_policy.py) does not mask what is being tested.
+    monkeypatch.setattr(watchdog_module.db, "claim_fallback", lambda wamid: True)
     monkeypatch.setattr(watchdog_module.db, "upsert_contact", lambda wa_id: {"id": 1})
     monkeypatch.setattr(watchdog_module.db, "insert_message", lambda **kwargs: {"id": 1})
     monkeypatch.setattr(

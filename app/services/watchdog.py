@@ -74,6 +74,13 @@ class ReplyWatchdog:
                 payload={"wa_message_id": wa_message_id},
             )
 
+            # The n8n client sends the same apology when it gives up dispatching. Whoever
+            # gets here first speaks; the other stays quiet. The error above is still
+            # logged either way, so nothing is hidden from the error log.
+            if not db.claim_fallback(wa_message_id):
+                print(f"[Watchdog] Fallback already sent for {wa_message_id}, not repeating")
+                return
+
             # 2. Deliver fallback message to customer
             fallback_res = await meta_service.send_text_message(
                 to_wa_id=wa_id,

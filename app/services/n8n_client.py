@@ -135,7 +135,24 @@ class N8NClient:
                 last_error_text = f"n8n webhook returned HTTP {response.status_code}: {response.text[:200]}"
                 print(f"[n8n Client] Attempt {attempt} failed: {last_error_text}")
 
+            except httpx.TimeoutException as exc:
+                # n8n ACCEPTED the request and is still working on it - the socket just went
+                # quiet. Retrying starts a SECOND agent run of the same message, which is
+                # pure duplicate work: on 26 Sep a single heavy request span three parallel
+                # runs (410s, 214s, 174s) and 208 LLM calls, and every answer was discarded
+                # because nobody was listening any more. Stop here and let the watchdog
+                # handle the customer.
+                last_error_text = (
+                    f"n8n did not answer within {self.REQUEST_TIMEOUT_SECONDS}s on attempt "
+                    f"{attempt} ({type(exc).__name__}); not retried - the workflow is still "
+                    f"running and a retry would duplicate it"
+                )
+                print(f"[n8n Client] {last_error_text}")
+                break
+
             except httpx.RequestError as exc:
+                # Genuinely unreachable (DNS, refused, reset). n8n never took the work, so a
+                # retry is safe and is exactly what retries are for.
                 last_error_text = f"Connection error on attempt {attempt}: {str(exc)}"
                 print(f"[n8n Client] {last_error_text}")
 
@@ -144,8 +161,8 @@ class N8NClient:
                 print(f"[n8n Client] Backing off for {delay}s before retry...")
                 await asyncio.sleep(delay)
 
-        # Fallback handling on exhausted retries
-        print(f"[n8n Client] ALL {self.max_retries} RETRIES FAILED. Triggering fallback reply...")
+        # Fallback handling once we have given up
+        print(f"[n8n Client] Dispatch gave up. {last_error_text}")
         db.log_error(
             step="n8n",
             error_text=f"n8n dispatch failed after {self.max_retries} attempts: {last_error_text}",
@@ -155,8 +172,20 @@ class N8NClient:
             payload={"attempts": self.max_retries, "webhook_url": self.webhook_url},
         )
 
+        # Only one apology per message. The watchdog owns the same job, and on 26 Sep both
+        # fired for the same message: the watchdog at 90s and this path at 144s, so the
+        # customer was told twice that the bot was broken. claim_fallback lets exactly one
+        # of them through.
         if watchdog_instance:
             watchdog_instance.resolve_reply(data["message_id"], data["wa_id"])
+
+        if not db.claim_fallback(data["message_id"]):
+            print(f"[n8n Client] Fallback already sent for {data['message_id']}, not repeating")
+            return {
+                "status": "fallback_suppressed",
+                "attempts": self.max_retries,
+                "error": last_error_text,
+            }
 
         fallback_res = await meta_service.send_text_message(
             to_wa_id=data["wa_id"],

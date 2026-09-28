@@ -697,6 +697,29 @@ class SupabaseDatabase:
             self._prune_claims(now)
             self._claimed_messages[wa_message_id] = now
 
+    def claim_fallback(self, wa_message_id: str) -> bool:
+        """
+        Let exactly one apology out per inbound message.
+
+        Two independent paths send FALLBACK_REPLY_TEXT: the reply watchdog when it times
+        out, and the n8n client when it gives up dispatching. On 26 Sep both fired for the
+        same message - the watchdog at 90s and the dispatch path at 144s - so the customer
+        was told twice that the bot was broken.
+
+        Returns True for the first caller, False for anyone arriving afterwards.
+        """
+        if not wa_message_id:
+            return True
+
+        now = time.monotonic()
+        key = f"fallback:{wa_message_id}"
+        with self._claim_lock:
+            if key in self._claimed_messages:
+                return False
+            self._prune_claims(now)
+            self._claimed_messages[key] = now
+        return True
+
     def claim_media_reply(self, wa_id: str, msg_type: str) -> bool:
         """
         Rate-limit the canned "I can't read that" answer to one per burst.
