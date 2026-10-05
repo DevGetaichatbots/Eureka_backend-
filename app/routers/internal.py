@@ -83,7 +83,7 @@ async def receive_n8n_reply(
             body=settings.FALLBACK_REPLY_TEXT,
             wa_message_id=meta_id,
             msg_type="text",
-            meta_status="sent",
+            meta_status="failed" if delivery_res.get("error_detail") else "sent",
         )
         return {
             "status": "error_handled_with_fallback",
@@ -108,7 +108,7 @@ async def receive_n8n_reply(
             body=reply_text,
             wa_message_id=meta_id,
             msg_type="text",
-            meta_status="sent",
+            meta_status="failed" if delivery_res.get("error_detail") else "sent",
         )
         return {
             "status": "delivered",

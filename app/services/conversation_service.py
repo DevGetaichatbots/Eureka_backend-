@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -16,6 +17,30 @@ _PLACEHOLDER_BODY = re.compile(r"\s*\[[^\]]*\]\s*\Z")
 
 
 class InboundPipelineCoordinator:
+    INBOUND_STORE_ATTEMPTS = 3
+
+    async def _store_inbound(
+        self,
+        wa_id: str,
+        profile_name: Optional[str],
+        wa_message_id: str,
+        message_body: str,
+        msg_type: str,
+        media_url: Optional[str],
+    ) -> Dict[str, Any]:
+        contact = await conv_engine.upsert_contact(wa_id=wa_id, profile_name=profile_name)
+        conversation = await conv_engine.resolve_conversation(contact_id=contact["id"])
+        inbound_msg = await message_log_service.log_inbound_message(
+            conversation_id=conversation["id"],
+            contact_id=contact["id"],
+            wa_message_id=wa_message_id,
+            body=message_body,
+            msg_type=msg_type,
+            media_url=media_url,
+            meta_status="delivered",
+        )
+        return {"contact": contact, "conversation": conversation, "message": inbound_msg}
+
     async def handle_inbound_message(
         self,
         wa_id: str,
@@ -38,21 +63,38 @@ class InboundPipelineCoordinator:
         # Green/blue read ticks: notify Meta first, do not wait for n8n
         await meta_service.mark_message_as_read(wa_message_id)
 
-        contact = await conv_engine.upsert_contact(wa_id=wa_id, profile_name=profile_name)
+        # 1-3. Contact, conversation and the inbound row. Retried on a transient DB error
+        # (Render lost the database host for ~40 min on 5 Oct and these writes failed).
+        # Nothing is dispatched to n8n until these succeed, so a retry cannot duplicate a reply.
+        stored = None
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, self.INBOUND_STORE_ATTEMPTS + 1):
+            try:
+                stored = await self._store_inbound(
+                    wa_id, profile_name, wa_message_id, message_body, msg_type, media_url
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                print(f"[Inbound] store attempt {attempt}/{self.INBOUND_STORE_ATTEMPTS} failed for {wa_message_id}: {exc}")
+                if attempt < self.INBOUND_STORE_ATTEMPTS:
+                    await asyncio.sleep(1.5 * attempt)
 
-        # 2. Resolve or Open 24h Conversation
-        conversation = await conv_engine.resolve_conversation(contact_id=contact["id"])
+        if stored is None:
+            # Not saved, not answered. Free the claim so a later delivery can still be processed,
+            # and leave a record the team can act on instead of a silent traceback.
+            db.release_claim(wa_message_id)
+            db.log_error(
+                step="inbound_store",
+                error_text=f"Customer message not saved after {self.INBOUND_STORE_ATTEMPTS} attempts: {last_exc}",
+                wa_id=wa_id,
+                inbound_body=message_body,
+            )
+            return {"stored": False}
 
-        # 3. Persist Inbound Message
-        inbound_msg = await message_log_service.log_inbound_message(
-            conversation_id=conversation["id"],
-            contact_id=contact["id"],
-            wa_message_id=wa_message_id,
-            body=message_body,
-            msg_type=msg_type,
-            media_url=media_url,
-            meta_status="delivered",
-        )
+        contact = stored["contact"]
+        conversation = stored["conversation"]
+        inbound_msg = stored["message"]
 
         # A run of identical unreadable media earns one canned answer, not one each.
         # The message is still stored above, so the CRM shows every voice note the

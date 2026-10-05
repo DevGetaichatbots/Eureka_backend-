@@ -529,6 +529,14 @@ class SupabaseDatabase:
                 json={"last_login_at": now_iso},
             )
 
+    def update_message_status(self, wa_message_id: str, meta_status: str) -> None:
+        """Applies a Meta delivery callback (sent / delivered / read / failed) to an outbound message."""
+        with self._get_client() as client:
+            client.patch(
+                f"/rest/v1/messages?wa_message_id=eq.{wa_message_id}",
+                json={"meta_status": meta_status},
+            )
+
     def create_user(self, email: str, password_hash: str, role: str, status: str = "active") -> Dict[str, Any]:
         """Creates a new app user directly in Supabase or revives a previously deleted account."""
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -687,6 +695,13 @@ class SupabaseDatabase:
             print(f"[Idempotency] durable duplicate check failed for {wa_message_id}: {exc}")
 
         return True
+
+    def release_claim(self, wa_message_id: str) -> None:
+        """Drop an in-process claim after a failed attempt, so a later delivery can be processed."""
+        if not wa_message_id:
+            return
+        with self._claim_lock:
+            self._claimed_messages.pop(wa_message_id, None)
 
     def mark_message_processed(self, wa_message_id: str) -> None:
         """Record a wa_message_id as already handled, so a later claim is rejected."""

@@ -1,4 +1,5 @@
 import json
+from functools import partial
 from fastapi import APIRouter, Request, Response, BackgroundTasks, HTTPException, status, Query
 from starlette.concurrency import run_in_threadpool
 from app.config import settings
@@ -73,6 +74,29 @@ async def receive_meta_webhook(
             profile_name = None
             if contacts and len(contacts) > 0:
                 profile_name = contacts[0].get("profile", {}).get("name")
+
+            # Meta reports what happened to each OUTBOUND message here (sent/delivered/read/failed).
+            # These were ignored, so a reply Meta could not deliver still showed as "sent" in the portal.
+            for st in value.get("statuses", []):
+                status_id = st.get("id")
+                state = st.get("status")
+                if not status_id or state not in ("sent", "delivered", "read", "failed"):
+                    continue
+                await run_in_threadpool(db.update_message_status, status_id, state)
+                if state == "failed":
+                    errs = st.get("errors") or []
+                    detail = "; ".join(
+                        f"{e.get('code')}: {e.get('title') or e.get('message') or ''}".strip() for e in errs
+                    ) or "no detail from Meta"
+                    await run_in_threadpool(
+                        partial(
+                            db.log_error,
+                            step="meta_delivery",
+                            error_text=f"Meta could not deliver message {status_id}: {detail}",
+                            wa_id=st.get("recipient_id"),
+                            payload=st,
+                        )
+                    )
 
             for msg in messages:
                 wa_message_id = msg.get("id")
